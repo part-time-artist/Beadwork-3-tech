@@ -11,8 +11,17 @@
 # next.js
 /.next/
 
-# production
+# production / build output
 /build
+/dist
+/out
+
+# local agent / editor config (keep .claude/skills tracked)
+/.claude/settings.local.json
+/.claude/launch.json
+
+# stray downloads
+*.zip
 
 # misc
 .DS_Store
