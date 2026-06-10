@@ -180,6 +180,32 @@ export default function Home() {
   const [bg, setBg] = useState({ type: 'solid', color: '#FFFFFF', image: null })
   const bgImgRef = useRef(null)
 
+  // Background-image placement: offset (doc px) + scale on top of the cover
+  // fit, so the reference design can be positioned under the beads. While
+  // bgAdjust is on, canvas gestures move/resize the IMAGE instead of painting.
+  const [bgT, setBgT] = useState({ x: 0, y: 0, scale: 1 })
+  const [bgAdjust, setBgAdjust] = useState(false)
+  const bgAdjustRef = useRef(false)
+  bgAdjustRef.current = bgAdjust
+
+  // resize the image by `factor` keeping the doc point under (sx,sy) fixed
+  const imageZoomAt = (factor, sx, sy) => {
+    const m = { x: (sx - view.tx) / view.scale, y: (sy - view.ty) / view.scale }
+    setBgT((t) => {
+      const ns = clampNum(t.scale * factor, 0.2, 8)
+      const ff = ns / t.scale
+      const cx = geo.width / 2 + t.x
+      const cy = geo.height / 2 + t.y
+      return {
+        scale: ns,
+        x: m.x - (m.x - cx) * ff - geo.width / 2,
+        y: m.y - (m.y - cy) * ff - geo.height / 2,
+      }
+    })
+  }
+  const imageZoomAtRef = useRef(imageZoomAt)
+  imageZoomAtRef.current = imageZoomAt
+
   // ---- printed-chart settings ----
   const [printBeadMm, setPrintBeadMm] = useState(8) // fixed bead size on paper (mm)
   const [exportBg, setExportBg] = useState('transparent') // transparent | screen
@@ -423,8 +449,15 @@ export default function Home() {
         ctx.fillRect(0, 0, docW, docH)
       } else if (bg.type === 'image' && bgImgRef.current) {
         const img = bgImgRef.current
-        const s = Math.max(docW / img.width, docH / img.height)
-        ctx.drawImage(img, (docW - img.width * s) / 2, (docH - img.height * s) / 2, img.width * s, img.height * s)
+        const s = Math.max(docW / img.width, docH / img.height) * bgT.scale
+        const dw = img.width * s
+        const dh = img.height * s
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(0, 0, docW, docH)
+        ctx.clip() // the image never spills past the canvas edges
+        ctx.drawImage(img, (docW - dw) / 2 + bgT.x, (docH - dh) / 2 + bgT.y, dw, dh)
+        ctx.restore()
       } else if (checkerTile) {
         ctx.fillStyle = ctx.createPattern(checkerTile, 'repeat')
         ctx.fillRect(0, 0, docW, docH)
@@ -466,8 +499,12 @@ export default function Home() {
             ctx.fill()
           } else if (drawOutlines) {
             beadPath(ctx, cx, cy, Bw, Bh, tilt)
-            ctx.fillStyle = '#eaeaeb' // very slight grey so empty beads aren't white
-            ctx.fill()
+            // over a reference image, empty beads are outline-only so the
+            // design underneath stays visible; otherwise a very slight grey
+            if (bg.type !== 'image') {
+              ctx.fillStyle = '#eaeaeb'
+              ctx.fill()
+            }
             ctx.stroke()
           }
         }
@@ -502,7 +539,7 @@ export default function Home() {
         ctx.setLineDash([])
       }
     },
-    [viewport, view, geo, beads, bg, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee]
+    [viewport, view, geo, beads, bg, bgT, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee]
   )
 
   // size the canvas to the viewport (never to the document)
@@ -559,7 +596,14 @@ export default function Home() {
     const onWheel = (e) => {
       e.preventDefault()
       const r = canvas.getBoundingClientRect()
-      zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX - r.left, e.clientY - r.top)
+      const sx = e.clientX - r.left
+      const sy = e.clientY - r.top
+      // in image-adjust mode the wheel resizes the background image instead
+      if (bgAdjustRef.current) {
+        imageZoomAtRef.current(e.deltaY < 0 ? 1.08 : 1 / 1.08, sx, sy)
+        return
+      }
+      zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, sx, sy)
     }
     canvas.addEventListener('wheel', onWheel, { passive: false })
     return () => canvas.removeEventListener('wheel', onWheel)
@@ -744,7 +788,8 @@ export default function Home() {
       dragging.current = false
       return
     }
-    if (spaceHeld.current || e.button === 1) {
+    if (bgAdjust || spaceHeld.current || e.button === 1) {
+      // image-adjust mode: any pen/mouse drag moves the image (see move handler)
       panning.current = { x: e.clientX, y: e.clientY }
       return
     }
@@ -779,11 +824,28 @@ export default function Home() {
         const mx = (a.x + b.x) / 2
         const my = (a.y + b.y) / 2
         const g = pinchRef.current
-        setView((v) => {
-          const ns = clampNum(v.scale * (dist / g.dist), 0.02, 8)
-          const k = ns / v.scale
-          return { scale: ns, tx: mx - (g.mx - v.tx) * k, ty: my - (g.my - v.ty) * k }
-        })
+        if (bgAdjust) {
+          // image-adjust mode: the pinch resizes/moves the background image
+          const mPrev = { x: (g.mx - view.tx) / view.scale, y: (g.my - view.ty) / view.scale }
+          const mNow = { x: (mx - view.tx) / view.scale, y: (my - view.ty) / view.scale }
+          setBgT((t) => {
+            const ns = clampNum(t.scale * (dist / g.dist), 0.2, 8)
+            const ff = ns / t.scale
+            const cx = geo.width / 2 + t.x
+            const cy = geo.height / 2 + t.y
+            return {
+              scale: ns,
+              x: mNow.x - (mPrev.x - cx) * ff - geo.width / 2,
+              y: mNow.y - (mPrev.y - cy) * ff - geo.height / 2,
+            }
+          })
+        } else {
+          setView((v) => {
+            const ns = clampNum(v.scale * (dist / g.dist), 0.02, 8)
+            const k = ns / v.scale
+            return { scale: ns, tx: mx - (g.mx - v.tx) * k, ty: my - (g.my - v.ty) * k }
+          })
+        }
         pinchRef.current = { dist, mx, my }
         return
       }
@@ -793,7 +855,12 @@ export default function Home() {
       const dx = e.clientX - panning.current.x
       const dy = e.clientY - panning.current.y
       panning.current = { x: e.clientX, y: e.clientY }
-      setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }))
+      if (bgAdjust && bg.type === 'image') {
+        // image-adjust mode: dragging moves the image, not the view
+        setBgT((t) => ({ ...t, x: t.x + dx / view.scale, y: t.y + dy / view.scale }))
+      } else {
+        setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }))
+      }
       return
     }
     if (marqueeRef.current) {
@@ -830,7 +897,7 @@ export default function Home() {
       tapRef.current = null
       pinchRef.current = null
       panning.current = null
-      if (allowTap && t && t.valid && !t.moved && Date.now() - t.t0 < 350) {
+      if (allowTap && t && t.valid && !t.moved && Date.now() - t.t0 < 350 && !bgAdjust) {
         if (t.maxN === 2) undo()
         else if (t.maxN === 3) redo()
       }
@@ -921,6 +988,8 @@ export default function Home() {
     img.onload = () => {
       bgImgRef.current = img
       setBg((b) => ({ ...b, type: 'image', image: url }))
+      setBgT({ x: 0, y: 0, scale: 1 })
+      setBgAdjust(true) // go straight into placing the reference design
     }
     img.src = url
   }
@@ -928,7 +997,15 @@ export default function Home() {
   // ---- export (print-ready chart: outlined beads + guides + numbers + legend) ----
   const chartBackground = () => {
     if (exportBg === 'transparent') return { type: 'transparent' }
-    if (bg.type === 'image') return { type: 'image', img: bgImgRef.current }
+    if (bg.type === 'image') {
+      // pass the placement as FRACTIONS of the doc size so the chart (which
+      // rasterises at a different pixel scale) reproduces the same alignment
+      return {
+        type: 'image',
+        img: bgImgRef.current,
+        t: { scale: bgT.scale, fx: bgT.x / geo.width, fy: bgT.y / geo.height },
+      }
+    }
     return bg
   }
 
@@ -968,7 +1045,7 @@ export default function Home() {
   // ---- save artwork: persist in the tool so it reopens for editing next time ----
   const [savedAt, setSavedAt] = useState(null)
   const saveArtwork = () => {
-    const data = { version: 1, canvasCm, beadMM, palette, bg, beads: [...beads.entries()] }
+    const data = { version: 1, canvasCm, beadMM, palette, bg, bgT, beads: [...beads.entries()] }
     try {
       localStorage.setItem(DESIGN_KEY, JSON.stringify(data))
       setSavedAt(Date.now())
@@ -994,6 +1071,7 @@ export default function Home() {
       if (Array.isArray(d.palette)) setPalette(d.palette)
       // older saves may hold the removed on-screen transparent background
       if (d.bg) setBg(d.bg.type === 'transparent' ? { ...d.bg, type: 'solid' } : d.bg)
+      if (d.bgT) setBgT(d.bgT)
       if (Array.isArray(d.beads)) applyBeads(new Map(d.beads))
     } catch (e) {}
   }, [])
@@ -1090,10 +1168,17 @@ export default function Home() {
             </div>
           )}
           {bg.type === 'image' && (
-            <label className="ghost fileBtn">
-              Choose image…
-              <input type="file" accept="image/png,image/jpeg" style={{ display: 'none' }} onChange={(e) => onBgImage(e.target.files[0])} />
-            </label>
+            <>
+              <label className="ghost fileBtn">
+                Choose image…
+                <input type="file" accept="image/png,image/jpeg" style={{ display: 'none' }} onChange={(e) => onBgImage(e.target.files[0])} />
+              </label>
+              {bg.image && (
+                <button className="ghost" onClick={() => setBgAdjust((v) => !v)}>
+                  {bgAdjust ? 'Done adjusting' : 'Adjust image'}
+                </button>
+              )}
+            </>
           )}
         </div>
         </div>
@@ -1132,6 +1217,13 @@ export default function Home() {
               </button>
             ))}
           </div>
+          {/* image-adjust mode banner */}
+          {bgAdjust && (
+            <div className="adjustBar">
+              <span>ADJUST IMAGE — DRAG TO MOVE · PINCH / SCROLL TO RESIZE</span>
+              <button onClick={() => setBgAdjust(false)}>DONE</button>
+            </div>
+          )}
           <div className="zoomCtl">
             <button onClick={undo} title="Undo — 2-finger tap or Ctrl+Z">↶</button>
             <button onClick={redo} title="Redo — 3-finger tap or Ctrl+Shift+Z">↷</button>
@@ -1334,6 +1426,21 @@ export default function Home() {
         .zoomCtl button:hover { background: #1d1d1d; }
         .zoomCtl .zval { width: 54px; font-size: 11px; }
         .zsep { width: 1px; height: 18px; background: ${T.line}; margin: 0 3px; }
+
+        /* image-adjust mode banner */
+        .adjustBar {
+          position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+          display: flex; align-items: center; gap: 12px;
+          background: ${T.panelSolid}; border: 1px solid ${T.accent};
+          border-radius: ${T.radius}px; padding: 8px 12px;
+          font-family: ${T.mono}; font-size: 9px; letter-spacing: 0.08em;
+          color: ${T.ink}; white-space: nowrap;
+        }
+        .adjustBar button {
+          border: none; background: ${T.accent}; color: #fff; cursor: pointer;
+          font-family: ${T.mono}; font-size: 10px; font-weight: 700;
+          letter-spacing: 0.08em; padding: 6px 14px; border-radius: 4px;
+        }
 
         /* floating Draw/Erase/Select strip — right edge, ≥44px touch targets */
         .toolStrip {

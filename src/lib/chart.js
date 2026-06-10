@@ -105,18 +105,20 @@ export function drawNumbers(ctx, { geo, cols, rows, every = GUIDE_EVERY, mode = 
   ctx.restore()
 }
 
-function paintBackground(ctx, W, H, background) {
-  if (!background || background.type === 'transparent') return
-  if (background.type === 'solid') {
-    ctx.fillStyle = background.color
-    ctx.fillRect(0, 0, W, H)
-  } else if (background.type === 'image' && background.img) {
-    const img = background.img
-    const scale = Math.max(W / img.width, H / img.height)
-    const dw = img.width * scale
-    const dh = img.height * scale
-    ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh)
-  }
+// Image backgrounds carry the user's on-screen placement as fractions of the
+// bead-area size (background.t = { scale, fx, fy }), so the chart reproduces
+// exactly the alignment the designer set under the beads. Drawn into the bead
+// area (after the margin translate), clipped so it never spills into margins.
+function paintImageBackground(ctx, W, H, img, t = { scale: 1, fx: 0, fy: 0 }) {
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(0, 0, W, H)
+  ctx.clip()
+  const s = Math.max(W / img.width, H / img.height) * (t.scale || 1)
+  const dw = img.width * s
+  const dh = img.height * s
+  ctx.drawImage(img, (W - dw) / 2 + (t.fx || 0) * W, (H - dh) / 2 + (t.fy || 0) * H, dw, dh)
+  ctx.restore()
 }
 
 // Render the entire chart (beads + outlines + guides + edge numbers) to a fresh
@@ -133,8 +135,14 @@ export function renderFullChart({
   canvas.width = W
   canvas.height = H
   const ctx = canvas.getContext('2d')
-  paintBackground(ctx, W, H, background)
+  if (background && background.type === 'solid') {
+    ctx.fillStyle = background.color
+    ctx.fillRect(0, 0, W, H)
+  }
   ctx.translate(margin, margin)
+  if (background && background.type === 'image' && background.img) {
+    paintImageBackground(ctx, geo.width, geo.height, background.img, background.t)
+  }
   drawBeads(ctx, { geo, beads, cols, rows, tiltFor })
   if (guides) drawGuides(ctx, { geo, cols, rows, every })
   if (numbers) drawNumbers(ctx, { geo, cols, rows, every, mode: 'margin' })

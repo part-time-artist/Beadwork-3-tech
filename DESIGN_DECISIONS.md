@@ -172,6 +172,17 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
   touch DnD. A ghost swatch follows the pointer; tap = pick colour, drag past
   8px = fill on release over the canvas. One path for finger/pencil/mouse.
 
+## Background reference image (2026-06-10)
+- The uploaded image is a **placeable reference under the beads**: "Adjust
+  image" mode (auto-entered on upload; banner + DONE on canvas) — drag moves,
+  pinch/wheel resizes (`bgT` = offset + scale over the cover fit, clamped
+  0.2–8, clipped to the canvas).
+- While a bg image is set, **empty beads draw outline-only** (no grey fill) so
+  the design shows through; painted beads sit on top.
+- Placement is saved with the artwork and **reproduced in the PNG export**
+  (passed as fractions of the bead area → chart.js `paintImageBackground`).
+- In adjust mode painting/undo-taps are suspended; gestures act on the image.
+
 ## UI fixes pass (2026-06-10)
 - On-screen background: **solid colour / image only** — transparent is an
   EXPORT-time choice only (`exportBg`).

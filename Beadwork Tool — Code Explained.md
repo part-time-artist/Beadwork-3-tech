@@ -160,6 +160,10 @@ Every press/move/release arrives as a **pointer event** carrying a `pointerType`
 
 While you drag a stroke, the code keeps the list of points your pencil passed through (`strokeRef`). Each move it asks: *does this whole path still fit one of the lattice's straight directions* — along a row, or one of the two weave diagonals? "Fit" means every recorded point stays within about one bead-height of the ideal line. Once the stroke spans **more than 3 beads** while fitting, it snaps: the design is rebuilt as *(what existed at stroke start)* + *a clean line of beads* sampled densely along the perfect axis from your start point. If you then curve away, it un-snaps and replays your recorded freehand path instead — nothing is lost. The same logic works for the eraser. Two performance guards matter on iPad: the recorded path only keeps points more than 1px apart, and the snapped line is only rebuilt when it actually gains/loses a bead-length — rebuilding the whole design Map 240×/second crashed mobile Safari. Knobs: `SNAP_BEADS` (3) and the `Bh * 0.9` tolerance in `evalSnap`, both in `App.jsx`.
 
+### The background reference image
+
+Upload an image and the tool drops into **adjust mode** (banner at the top, DONE to finish): dragging moves the picture, pinching or scrolling resizes it. Its placement lives in one small state object — `bgT = { x, y, scale }` — an offset and zoom *on top of* the automatic cover-fit. While adjusting, the same gesture code that normally pans/zooms the canvas is simply re-routed to update `bgT` instead of the view — one mechanism, two targets. Empty beads switch to outline-only over an image, so the reference design shows through and you bead "on top" of it. The placement is stored with your artwork and handed to the chart renderer as *fractions* of the canvas size, so the PNG export reproduces the exact same alignment even though it rasterises at print resolution.
+
 ### Undo / redo — a history of Maps
 
 ```js
