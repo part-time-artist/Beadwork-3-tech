@@ -6,6 +6,9 @@ context. The `/grill-me` skill reads and appends to this file.
 ## Measured geometry (from the user's Figma vectors — do not guess)
 - Bead intrinsic ratio **4:5 (80:100)**, w/h = 0.80. Upright bead bbox = 80×100.
 - Same-row pitch 127 → `PACK_X = 1.59` (× bead width).
+  **SUPERSEDED 2026-06-10:** `PACK_X = 1.296`, calibrated to the real woven
+  swatch — **36 beads across 7 cm at a 1.5 mm bead** (pitch 70/36 ≈ 1.944 mm);
+  beads sit denser with smaller gaps. Bead sizes offered: **1.5 mm / 3 mm**.
 - Apex-to-apex row pitch 175.5 → `PACK_Y = 0.875` (× bead height).
 - Base beads tilt **±45°** (from `Frame 3`, the canonical 3-bead unit).
 - Tilt pattern (corrected ×3 on 2026-06-10, see `assets/rows explaination.png`):
@@ -165,3 +168,16 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
 - Dropping a palette colour anywhere fills the **nearest** bead's region
   (`nearestBead` in `lib/geometry.js`) — no longer requires dropping exactly on a
   bead.
+- **Pointer-based, not HTML5 drag-and-drop** (2026-06-10): iPad Safari has no
+  touch DnD. A ghost swatch follows the pointer; tap = pick colour, drag past
+  8px = fill on release over the canvas. One path for finger/pencil/mouse.
+
+## UI fixes pass (2026-06-10)
+- On-screen background: **solid colour / image only** — transparent is an
+  EXPORT-time choice only (`exportBg`).
+- Clear canvas: **press-and-hold button (700 ms, sweeping fill, no confirm)**
+  pinned at the LEFT panel's bottom; undo can restore.
+- Both panels: content scrolls (`.panelScroll`), action cluster pinned below.
+- App height **100dvh** (100vh hid the bottom buttons behind iPad Safari chrome).
+- `Pill` inputs edit a local draft while focused, so the field can be cleared
+  to retype (canvas cm fields were impossible to edit); hex text fits (14px).

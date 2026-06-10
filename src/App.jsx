@@ -40,10 +40,10 @@ const DEFAULT_PALETTE = [
 const key = (c, r) => `${c},${r}`
 
 // The only two bead sizes. Both 4:5 (width:height); stated size = bead width.
-// "1 mm" is 1.05mm so the row pitch (PACK_X × w = 1.67mm) gives exactly
-// 6 beads = 3 pairs per cm (locked iPad-pass decision #5).
+// 1.5mm × PACK_X (1.296) = 1.944mm pitch → exactly 36 beads across 7cm,
+// matching the user's real woven swatch (corrected 2026-06-10).
 const BEAD_SIZES = [
-  { label: '1 mm', w: 1.05, h: 1.3125 },
+  { label: '1.5 mm', w: 1.5, h: 1.875 },
   { label: '3 mm', w: 3, h: 3.75 },
 ]
 
@@ -175,7 +175,9 @@ export default function Home() {
   )
 
   // ---- background ----
-  const [bg, setBg] = useState({ type: 'transparent', color: '#FFFFFF', image: null })
+  // On screen the canvas always has a real background (solid colour or image);
+  // transparency is purely an EXPORT choice (exportBg below).
+  const [bg, setBg] = useState({ type: 'solid', color: '#FFFFFF', image: null })
   const bgImgRef = useRef(null)
 
   // ---- printed-chart settings ----
@@ -867,15 +869,48 @@ export default function Home() {
     }
   }, [])
 
-  // drag a colour swatch from the palette onto the canvas to flood-fill a region.
-  // Use nearestBead so a drop in a gap still fills the closest bead's region.
-  const onCanvasDragOver = (e) => e.preventDefault()
-  const onCanvasDrop = (e) => {
+  // ---- drag a colour swatch onto the canvas to flood-fill --------------------
+  // Pointer-based, NOT HTML5 drag-and-drop: iPad Safari has no touch DnD, so
+  // one pointer path serves finger, pencil and mouse. A small ghost swatch
+  // follows the pointer; a quick tap (no movement) just picks the colour.
+  // nearestBead lets a drop in a gap still fill the closest bead's region.
+  const swatchDrag = useRef(null) // { color, x0, y0, active }
+  const [dragGhost, setDragGhost] = useState(null) // { color, x, y } client coords
+
+  const onSwatchDown = (c) => (e) => {
     e.preventDefault()
-    const dropColor = e.dataTransfer.getData('text/plain')
-    if (!dropColor) return
-    const { x, y } = docFromEvent(e)
-    floodFill(nearestBead(geo, x, y), dropColor)
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+    swatchDrag.current = { color: c, x0: e.clientX, y0: e.clientY, active: false }
+  }
+  const onSwatchMove = (e) => {
+    const d = swatchDrag.current
+    if (!d) return
+    if (!d.active && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > 8) d.active = true
+    if (d.active) setDragGhost({ color: d.color, x: e.clientX, y: e.clientY })
+  }
+  const onSwatchUp = (e) => {
+    const d = swatchDrag.current
+    swatchDrag.current = null
+    setDragGhost(null)
+    if (!d) return
+    if (!d.active) {
+      setColor(d.color) // tap = pick the colour
+      return
+    }
+    const rect = canvasRef.current.getBoundingClientRect()
+    if (
+      e.clientX >= rect.left && e.clientX <= rect.right &&
+      e.clientY >= rect.top && e.clientY <= rect.bottom
+    ) {
+      const x = (e.clientX - rect.left - view.tx) / view.scale
+      const y = (e.clientY - rect.top - view.ty) / view.scale
+      pushRecent(d.color)
+      floodFill(nearestBead(geo, x, y), d.color)
+    }
+  }
+  const onSwatchCancel = () => {
+    swatchDrag.current = null
+    setDragGhost(null)
   }
 
   // ---- background image upload ----
@@ -927,11 +962,8 @@ export default function Home() {
     link.click()
   }
 
-  const clearCanvas = () => {
-    if (window.confirm('Clear the whole canvas?')) {
-      commit((prev) => (prev.size ? new Map() : prev))
-    }
-  }
+  // no confirm dialog: triggered by a press-and-hold button, and undo-able
+  const clearCanvas = () => commit((prev) => (prev.size ? new Map() : prev))
 
   // ---- save artwork: persist in the tool so it reopens for editing next time ----
   const [savedAt, setSavedAt] = useState(null)
@@ -960,7 +992,8 @@ export default function Home() {
         setBeadMM({ w: s.w, h: s.h })
       }
       if (Array.isArray(d.palette)) setPalette(d.palette)
-      if (d.bg) setBg(d.bg)
+      // older saves may hold the removed on-screen transparent background
+      if (d.bg) setBg(d.bg.type === 'transparent' ? { ...d.bg, type: 'solid' } : d.bg)
       if (Array.isArray(d.beads)) applyBeads(new Map(d.beads))
     } catch (e) {}
   }, [])
@@ -969,8 +1002,9 @@ export default function Home() {
 
   return (
     <div className="app">
-      {/* LEFT panel — tools & document */}
+      {/* LEFT panel — tools & document. Scrolls; hold-to-clear pinned at the bottom. */}
       <aside className="panel left">
+        <div className="panelScroll">
         <div className="brand">BEADWORK<span className="dot" /></div>
         <div className="sub">3-BEAD TECHNIQUE</div>
 
@@ -1015,7 +1049,6 @@ export default function Home() {
             <Pill value={canvasCm.h} label="cm H" onChange={(v) => setCanvasCm((c) => ({ ...c, h: clampNum(v, 1, 300) }))} />
           </div>
           <div className="hint">≈ {cols} × {rows} beads · pinch / scroll to zoom · finger / space-drag to pan · 2-finger tap undo · 3-finger tap redo</div>
-          <button className="ghost" onClick={clearCanvas}>Clear canvas</button>
         </div>
 
         <div className="card">
@@ -1038,7 +1071,6 @@ export default function Home() {
           <div className="cardTitle">Background</div>
           <div className="segmented">
             {[
-              ['transparent', 'None'],
               ['solid', 'Colour'],
               ['image', 'Image'],
             ].map(([id, label]) => (
@@ -1064,6 +1096,11 @@ export default function Home() {
             </label>
           )}
         </div>
+        </div>
+
+        <div className="saveCluster">
+          <HoldButton onHold={clearCanvas}>Hold to clear canvas</HoldButton>
+        </div>
       </aside>
 
       <main className="stage">
@@ -1075,8 +1112,6 @@ export default function Home() {
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerCancel}
-            onDragOver={onCanvasDragOver}
-            onDrop={onCanvasDrop}
           />
           {/* floating tool strip — right edge, under a right-handed iPad user's
               hand (locked iPad-pass decision #4). Big ≥44px touch targets. */}
@@ -1137,9 +1172,10 @@ export default function Home() {
                     key={i}
                     className={`sw ${c === color ? 'on' : ''}`}
                     style={{ background: c }}
-                    draggable
-                    onDragStart={(e) => e.dataTransfer.setData('text/plain', c)}
-                    onClick={() => setColor(c)}
+                    onPointerDown={onSwatchDown(c)}
+                    onPointerMove={onSwatchMove}
+                    onPointerUp={onSwatchUp}
+                    onPointerCancel={onSwatchCancel}
                     title={c}
                   />
                 ))}
@@ -1153,10 +1189,11 @@ export default function Home() {
                 key={i}
                 className={`sw ${c === color ? 'on' : ''}`}
                 style={{ background: c }}
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData('text/plain', c)}
-                onClick={() => setColor(c)}
-                title={`${c} — click to pick, drag onto canvas to fill`}
+                onPointerDown={onSwatchDown(c)}
+                onPointerMove={onSwatchMove}
+                onPointerUp={onSwatchUp}
+                onPointerCancel={onSwatchCancel}
+                title={`${c} — tap to pick, drag onto canvas to fill`}
               />
             ))}
             <button
@@ -1231,6 +1268,14 @@ export default function Home() {
         </div>
       </aside>
 
+      {/* floating swatch that follows the pointer while dragging a colour */}
+      {dragGhost && (
+        <div
+          className="dragGhost"
+          style={{ left: dragGhost.x, top: dragGhost.y, background: dragGhost.color }}
+        />
+      )}
+
       <style jsx global>{`
         html, body, #root { height: 100%; margin: 0; }
         body {
@@ -1250,7 +1295,17 @@ export default function Home() {
       `}</style>
 
       <style jsx>{`
-        .app { display: flex; height: 100vh; overflow: hidden; }
+        /* 100dvh = the REAL visible height on iPad Safari (100vh hides behind
+           the browser chrome and cut off the bottom buttons) */
+        .app { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
+
+        /* floating swatch following the pointer during a colour drag */
+        .dragGhost {
+          position: fixed; z-index: 40; width: 30px; height: 30px;
+          border-radius: 10px; pointer-events: none;
+          transform: translate(-50%, -130%);
+          border: 2px solid #ffffff; box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+        }
         .stage {
           flex: 1; display: flex; flex-direction: column;
           min-width: 0; min-height: 0;
@@ -1316,11 +1371,12 @@ export default function Home() {
           padding: 18px 14px; overflow: hidden;
           display: flex; flex-direction: column; gap: 11px;
         }
-        .panel.left { border-right: 1px solid ${T.line}; overflow-y: auto; }
+        .panel.left { border-right: 1px solid ${T.line}; }
         .panel.right { border-left: 1px solid ${T.line}; }
-        /* right panel: cards scroll, the save cluster below stays pinned */
+        /* both panels: cards scroll, the pinned cluster below stays visible */
         .panelScroll {
           flex: 1 1 auto; min-height: 0; overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
           display: flex; flex-direction: column; gap: 11px;
         }
         .saveCluster {
@@ -1401,6 +1457,7 @@ export default function Home() {
         .sw {
           width: 28px; height: 28px; border-radius: 9px; cursor: pointer;
           border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+          touch-action: none; /* a finger on a swatch drags colour, not the panel */
         }
         .sw.on { border-color: ${T.ink}; }
         .sw.add {
@@ -1474,16 +1531,31 @@ function IconSelect() {
   )
 }
 
-// inline-labeled input pill (signature look, spec §7.5)
+// inline-labeled input pill (signature look, spec §7.5).
+// While focused it edits a local draft string, so the field can be cleared
+// to type a fresh number (a clamped controlled input made that impossible);
+// the real value only updates on valid input and snaps back on blur.
 function Pill({ value, label, onChange, step = 1, text = false }) {
+  const [draft, setDraft] = useState(null)
   return (
     <div className="pill">
       <input
         className="pillInput"
         type={text ? 'text' : 'number'}
-        value={value}
+        value={draft !== null ? draft : value}
         step={step}
-        onChange={(e) => onChange(text ? e.target.value : parseFloat(e.target.value))}
+        onFocus={() => setDraft(String(value))}
+        onChange={(e) => {
+          const v = e.target.value
+          setDraft(v)
+          if (text) {
+            onChange(v)
+            return
+          }
+          const n = parseFloat(v)
+          if (!Number.isNaN(n)) onChange(n)
+        }}
+        onBlur={() => setDraft(null)}
       />
       <span className="pillLabel">{label}</span>
       <style jsx>{`
@@ -1494,7 +1566,7 @@ function Pill({ value, label, onChange, step = 1, text = false }) {
         }
         .pillInput {
           border: none; outline: none; width: 100%; min-width: 0;
-          font-size: 17px; font-weight: 700; color: ${T.ink}; background: none;
+          font-size: 14px; font-weight: 600; color: ${T.ink}; background: none;
           font-family: ${T.mono}; -moz-appearance: textfield;
         }
         /* remove the number-input spinner / scroll buttons (clean minimal) */
@@ -1504,6 +1576,55 @@ function Pill({ value, label, onChange, step = 1, text = false }) {
           font-family: ${T.mono}; text-transform: uppercase; letter-spacing: 0.08em; }
       `}</style>
     </div>
+  )
+}
+
+// press-and-hold button: the action fires only after `duration` ms of
+// continuous press (release/leave cancels). A sweeping fill shows progress —
+// no confirm dialog needed, and the action is undo-able anyway.
+function HoldButton({ duration = 700, onHold, children }) {
+  const timer = useRef(null)
+  const [holding, setHolding] = useState(false)
+  const start = (e) => {
+    e.preventDefault()
+    setHolding(true)
+    timer.current = setTimeout(() => {
+      setHolding(false)
+      onHold()
+    }, duration)
+  }
+  const cancel = () => {
+    setHolding(false)
+    clearTimeout(timer.current)
+  }
+  return (
+    <button
+      className={`holdBtn ${holding ? 'holding' : ''}`}
+      onPointerDown={start}
+      onPointerUp={cancel}
+      onPointerLeave={cancel}
+      onPointerCancel={cancel}
+    >
+      <span className="holdFill" style={{ transitionDuration: `${duration}ms` }} />
+      <span className="holdLabel">{children}</span>
+      <style jsx>{`
+        .holdBtn {
+          position: relative; overflow: hidden; touch-action: none;
+          padding: 12px; border: none; background: ${T.pill}; color: ${T.inkSoft};
+          border-radius: 10px; cursor: pointer; font-size: 12px; font-weight: 600;
+          text-align: center; width: 100%; -webkit-user-select: none; user-select: none;
+        }
+        .holdBtn:hover { color: ${T.ink}; }
+        .holdFill {
+          position: absolute; inset: 0; background: ${T.accent}; opacity: 0.85;
+          transform: scaleX(0); transform-origin: left;
+          transition-property: transform; transition-timing-function: linear;
+        }
+        .holdBtn.holding .holdFill { transform: scaleX(1); }
+        .holdBtn.holding .holdLabel { color: #ffffff; }
+        .holdLabel { position: relative; }
+      `}</style>
+    </button>
   )
 }
 

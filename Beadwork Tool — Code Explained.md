@@ -34,14 +34,14 @@ Folders like `components/`, `parts/`, `static/` are leftovers from the open-sour
 ### The lattice (the bead grid)
 
 ```js
-export const PACK_X = 1.59   // horizontal spacing ÷ bead width
+export const PACK_X = 1.296  // horizontal spacing ÷ bead width
 export const PACK_Y = 0.875  // vertical spacing ÷ bead height
 ```
 
-These two numbers ARE the weave. They were **measured from your Figma vectors**, not guessed:
-- A bead is 80 wide × 100 tall → ratio 4:5.
-- Centre-to-centre distance between beads in a row was 127 → 127 ÷ 80 = **1.59**.
-- Row-to-row distance was 87.75 → 87.75 ÷ 100 = **0.875**.
+These two numbers ARE the weave — they come from real measurements, not guesses:
+- A bead is 80 wide × 100 tall in the Figma vectors → ratio 4:5.
+- `PACK_X` is calibrated to the **real woven swatch**: 36 beads across 7 cm at a 1.5 mm bead → pitch 70 ÷ 36 ≈ 1.944 mm → 1.944 ÷ 1.5 ≈ **1.296**. (The first value, 1.59, came from Figma but left too much gap between beads.)
+- Row-to-row distance in Figma was 87.75 → 87.75 ÷ 100 = **0.875**.
 
 Because `PACK_Y` is *less than 1*, each row sits **closer than one full bead height** to the next — that's what makes beads nestle into the gaps below, the honeycomb look of real weaving. Odd rows also shift right by half a step (`rowOffset`) — the brick-wall offset.
 
@@ -117,7 +117,7 @@ Your whole artwork is a **Map** (a dictionary): key `"col,row"` → colour hex. 
 
 ### Physical model → screen size
 
-- `beadMM` (1 mm or 3 mm beads) + `canvasCm` → `cols, rows` via `beadCountFromCm`. The "1 mm" bead is really 1.05 mm wide so that one cm of row holds **exactly 6 beads (3 pairs)** — pitch = 1.59 × 1.05 ≈ 1.67 mm, and 10 ÷ 1.67 = 6.
+- `beadMM` (1.5 mm or 3 mm beads) + `canvasCm` → `cols, rows` via `beadCountFromCm`. At 1.5 mm, a 7 cm row holds **exactly 36 beads** — pitch = 1.296 × 1.5 = 1.944 mm, and 70 ÷ 1.944 = 36, matching the real swatch.
 - On screen: `Bw = beadMM.w × 8` px (8 screen pixels per real mm). So the artboard's size tracks the *cm canvas*, and changing bead size changes **density** (how many beads fit), not canvas size — exactly like real life.
 
 ### `tiltFor(col, row)` — the woven look
@@ -142,7 +142,7 @@ Runs every time anything changes, in order: background (colour/image/checkerboar
 ### Painting tools
 
 - **`paintBead` / `paintBrush`** — set or delete entries in the beads Map. Brush sizes 2–6 paint all beads within a growing radius. If nothing actually changed, it returns the old Map untouched so React skips a pointless redraw.
-- **`floodFill`** — the paint-bucket, triggered by *dragging a palette colour onto the canvas*. Starts at the dropped bead and spreads to same-coloured neighbours, stopping at different colours. Crucially it spreads via the **staggered neighbours** — left, right, and the four *diagonal nestled* beads — because that's who actually touches whom in this weave. A square-grid flood fill would be wrong here.
+- **`floodFill`** — the paint-bucket, triggered by *dragging a palette colour onto the canvas*. The drag itself is built from plain pointer events (a ghost swatch follows your finger/pencil/mouse; a quick tap just picks the colour) because **iPad Safari doesn't support HTML5 drag-and-drop for touch at all** — that's why the old version silently did nothing on iPad. The fill starts at the dropped bead and spreads to same-coloured neighbours, stopping at different colours. Crucially it spreads via the **staggered neighbours** — left, right, and the four *diagonal nestled* beads — because that's who actually touches whom in this weave. A square-grid flood fill would be wrong here.
 - **Selection (marquee)** — drag a box; any bead whose *centre* falls inside gets selected (stored as a Set of keys). Then Recolour / Delete / Copy / Paste. Paste offsets by **2 cells** — an even number — because shifting by 1 would swap apex and base rows and break the weave pattern ("parity").
 
 ### Pointer handling — who is touching, and with what?

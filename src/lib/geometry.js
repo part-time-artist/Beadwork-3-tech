@@ -2,12 +2,13 @@
 // Everything is driven from bead size so changing the ratio rescales the grid.
 // See BEADWORK_TOOL_SPEC.md §4.
 
-// Packing constants (pitch as a multiple of bead size). These are the knobs to
-// tune against MacBook Air - 1.png. Beads nestle when PACK_Y < 1 and rows are
-// half-offset, so each bead drops into the gap of the row above/below.
-// Measured from the user's Figma vectors (assets/Frame 2.png & Frame 3.png):
-// upright bead bbox = 80×100, same-row pitch = 127, apex-to-apex row pitch = 175.5.
-export const PACK_X = 1.59 // horizontal centre-to-centre / bead width (127/80)
+// Packing constants (pitch as a multiple of bead size). Beads nestle when
+// PACK_Y < 1 and rows are half-offset, so each bead drops into the gap of the
+// row above/below.
+// PACK_X calibrated to the user's real woven swatch (2026-06-10): 36 beads
+// across 7cm at a 1.5mm bead → pitch 70/36 ≈ 1.944mm → 1.944/1.5 ≈ 1.296.
+// (Was 1.59 from the Figma vectors; lowered so beads sit denser, smaller gaps.)
+export const PACK_X = 1.296 // horizontal centre-to-centre / bead width
 export const PACK_Y = 0.875 // vertical row pitch / bead height (87.75/100)
 
 export function makeGeometry({ Bw, Bh, cols, rows, padScale = 0.75 }) {
