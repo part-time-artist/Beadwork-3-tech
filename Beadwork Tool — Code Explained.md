@@ -153,6 +153,10 @@ Every press/move/release arrives as a **pointer event** carrying a `pointerType`
 
 `docFromEvent` converts a screen position into document coordinates by undoing the camera — the inverse of the drawing transform. While a pencil stroke is live, incoming finger touches are ignored (palm protection), and Safari's own `gesturestart/change/end` page-zoom events are blocked so only the canvas camera zooms, never the page.
 
+### Straight-line snapping
+
+While you drag a stroke, the code keeps the list of points your pencil passed through (`strokeRef`). Each move it asks: *does this whole path still fit one of the lattice's straight directions* — along a row, or one of the two weave diagonals? "Fit" means every recorded point stays within about one bead-height of the ideal line. Once the stroke spans **more than 3 beads** while fitting, it snaps: the design is rebuilt as *(what existed at stroke start)* + *a clean line of beads* sampled densely along the perfect axis from your start point. If you then curve away, it un-snaps and replays your recorded freehand path instead — nothing is lost. The same logic works for the eraser. Knobs: `SNAP_BEADS` (3) and the `Bh * 0.9` tolerance in `evalSnap`, both in `App.jsx`.
+
 ### Undo / redo — a history of Maps
 
 ```js

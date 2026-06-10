@@ -106,10 +106,20 @@ export default function Home() {
   // commits it only if the stroke changed something); one-shot edits (fill,
   // selection ops, clear) go through `commit`, which snapshots only on change.
   const beadsRef = useRef(beads)
-  useEffect(() => { beadsRef.current = beads }, [beads])
   const undoStack = useRef([])
   const redoStack = useRef([])
   const strokeBase = useRef(null) // beads Map at stroke start
+
+  // SINGLE write path for the design Map. beadsRef is advanced SYNCHRONOUSLY,
+  // never via an effect: React renders lag behind fast pencil events, so a new
+  // stroke reading render-time state could start from a stale Map and wipe the
+  // previous stroke. Everything that changes beads must go through applyBeads.
+  const applyBeads = useCallback((next) => {
+    if (typeof next === 'function') next = next(beadsRef.current)
+    if (next === beadsRef.current) return
+    beadsRef.current = next
+    setBeads(next)
+  }, [])
 
   const pushHistory = (prev) => {
     undoStack.current.push(prev)
@@ -118,24 +128,23 @@ export default function Home() {
   }
 
   const commit = useCallback((updater) => {
-    setBeads((prev) => {
-      const next = updater(prev)
-      if (next === prev) return prev
-      pushHistory(prev)
-      return next
-    })
-  }, [])
+    const prev = beadsRef.current
+    const next = updater(prev)
+    if (next === prev) return
+    pushHistory(prev)
+    applyBeads(next)
+  }, [applyBeads])
 
   const undo = useCallback(() => {
     if (!undoStack.current.length) return
     redoStack.current.push(beadsRef.current)
-    setBeads(undoStack.current.pop())
-  }, [])
+    applyBeads(undoStack.current.pop())
+  }, [applyBeads])
   const redo = useCallback(() => {
     if (!redoStack.current.length) return
     undoStack.current.push(beadsRef.current)
-    setBeads(redoStack.current.pop())
-  }, [])
+    applyBeads(redoStack.current.pop())
+  }, [applyBeads])
 
   // desktop keyboard: Ctrl/⌘+Z undo, Ctrl/⌘+Shift+Z redo
   useEffect(() => {
@@ -150,16 +159,17 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKey)
   }, [undo, redo])
 
-  // Per-cell tilt (radians). The weave groups beads in 3s: an upright apex with
-  // two base beads leaning outward beneath it. On the half-offset lattice we
-  // render even rows upright and odd-row beads leaning ± by column → the woven
-  // herringbone of the real piece (assets/techniques/3 bead technique.jpg).
+  // Per-cell tilt (radians). Apex (even) rows upright; tilted (odd) rows lean
+  // ±45° as WHOLE ROWS, alternating row by row (assets/rows explaination.png).
   const tiltFor = useCallback(
     (col, row) => {
       if (orient !== 'woven') return 0
-      if (row % 2 === 0) return 0 // apex: upright
-      const A = Math.PI / 4 // ±45° — measured from Frame 3 (the canonical 3-bead unit)
-      return col % 2 === 0 ? A : -A // two base beads lean toward the apex above
+      if (row % 2 === 0) return 0 // apex rows: upright
+      const A = Math.PI / 4 // ±45°
+      // Tilted rows alternate direction ROW by ROW — every bead in one tilted
+      // row leans the same way, the next tilted row leans the other way
+      // (assets/rows explaination.png). Base rows are 1,3,5… → (row+1)/2 parity.
+      return ((row + 1) / 2) % 2 === 1 ? A : -A
     },
     [orient]
   )
@@ -192,27 +202,6 @@ export default function Home() {
   }
 
   // ---- mutate beads ----
-  const paintBead = useCallback(
-    (cell, mode) => {
-      if (!cell) return
-      setBeads((prev) => {
-        const k = key(cell.col, cell.row)
-        // bail out when nothing changes so React skips a needless full redraw
-        if (mode === 'erase') {
-          if (!prev.has(k)) return prev
-          const next = new Map(prev)
-          next.delete(k)
-          return next
-        }
-        if (prev.get(k) === color) return prev
-        const next = new Map(prev)
-        next.set(k, color)
-        return next
-      })
-    },
-    [color]
-  )
-
   const floodFill = useCallback(
     (cell, useColor = color) => {
       if (!cell) return
@@ -282,7 +271,7 @@ export default function Home() {
     (x, y, mode) => {
       const cells = brushCells(x, y)
       if (!cells.length) return
-      setBeads((prev) => {
+      applyBeads((prev) => {
         let next = null
         for (const { col, row } of cells) {
           const k = key(col, row)
@@ -296,7 +285,7 @@ export default function Home() {
         return next || prev
       })
     },
-    [brushCells, color]
+    [brushCells, color, applyBeads]
   )
 
   // ---- selection (marquee Select tool) ----
@@ -710,18 +699,25 @@ export default function Home() {
   const handleStrokePoint = (p) => {
     const s = strokeRef.current
     if (s && !s.locked) {
-      s.pts.push(p)
+      // thin the recorded path: pencils fire up to 240 events/s
+      const last = s.pts[s.pts.length - 1]
+      if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 1) s.pts.push(p)
       const snap = evalSnap(s, p)
       if (snap) {
+        // throttle: rebuild the design only when the line gains/loses a sample,
+        // not on every pointer event (Map copies at 240Hz crash mobile Safari)
+        const n = Math.floor(snap.len / (snap.pitch / 4))
+        if (s.snapped && n === s.lastN) return
         s.snapped = true
-        setBeads(() => paintAlong(strokeBase.current, lineSamples(s.start, snap)))
+        s.lastN = n
+        applyBeads(paintAlong(strokeBase.current, lineSamples(s.start, snap)))
         return
       }
       if (s.snapped) {
         // was a snapped line, now curving: give back the freehand path
         s.snapped = false
         s.locked = true
-        setBeads(() => paintAlong(strokeBase.current, s.pts))
+        applyBeads(paintAlong(strokeBase.current, s.pts))
         return
       }
       // clearly not straight by now → stop evaluating for this stroke
@@ -758,7 +754,7 @@ export default function Home() {
     }
     dragging.current = true
     strokeBase.current = beadsRef.current // history: snapshot at stroke start
-    strokeRef.current = { start: p, pts: [], locked: false, snapped: false }
+    strokeRef.current = { start: p, pts: [], locked: false, snapped: false, lastN: -1 }
     if (tool === 'draw') pushRecent(color)
     paintBrush(p.x, p.y, tool)
   }
@@ -965,7 +961,7 @@ export default function Home() {
       }
       if (Array.isArray(d.palette)) setPalette(d.palette)
       if (d.bg) setBg(d.bg)
-      if (Array.isArray(d.beads)) setBeads(new Map(d.beads))
+      if (Array.isArray(d.beads)) applyBeads(new Map(d.beads))
     } catch (e) {}
   }, [])
 
