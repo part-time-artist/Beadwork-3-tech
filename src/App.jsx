@@ -40,10 +40,14 @@ const DEFAULT_PALETTE = [
 const key = (c, r) => `${c},${r}`
 
 // The only two bead sizes. Both 4:5 (width:height); stated size = bead width.
+// "1 mm" is 1.05mm so the row pitch (PACK_X × w = 1.67mm) gives exactly
+// 6 beads = 3 pairs per cm (locked iPad-pass decision #5).
 const BEAD_SIZES = [
-  { label: '1.5 mm', w: 1.5, h: 1.875 },
+  { label: '1 mm', w: 1.05, h: 1.3125 },
   { label: '3 mm', w: 3, h: 3.75 },
 ]
+
+const HISTORY_MAX = 50 // undo steps (one stroke / fill / selection op = one step)
 
 export default function Home() {
   // ---- physical model ----
@@ -83,9 +87,68 @@ export default function Home() {
 
   // ---- design data ----
   const [beads, setBeads] = useState(() => new Map())
-  const [tool, setTool] = useState('draw') // draw | erase | fill
+  const [tool, setTool] = useState('draw') // draw | erase | select
   const [color, setColor] = useState('#7A2E2E')
   const [orient, setOrient] = useState('woven') // uniform | woven (tilted 3-bead)
+  const [brush, setBrush] = useState(1) // brush radius in beads
+  const [recentColors, setRecentColors] = useState([]) // up to 5 recently used
+  const [selection, setSelection] = useState(() => new Set()) // selected bead keys
+  const [marquee, setMarquee] = useState(null) // live select rectangle (doc coords)
+  const [clipboard, setClipboard] = useState(null) // copied beads (relative)
+
+  const pushRecent = useCallback((c) => {
+    setRecentColors((prev) => [c, ...prev.filter((x) => x !== c)].slice(0, 5))
+  }, [])
+
+  // ---- undo / redo ----
+  // History stores whole bead Maps (they're replaced immutably, so pushing the
+  // old reference is free). Strokes snapshot once at pointer-down (endDrag
+  // commits it only if the stroke changed something); one-shot edits (fill,
+  // selection ops, clear) go through `commit`, which snapshots only on change.
+  const beadsRef = useRef(beads)
+  useEffect(() => { beadsRef.current = beads }, [beads])
+  const undoStack = useRef([])
+  const redoStack = useRef([])
+  const strokeBase = useRef(null) // beads Map at stroke start
+
+  const pushHistory = (prev) => {
+    undoStack.current.push(prev)
+    if (undoStack.current.length > HISTORY_MAX) undoStack.current.shift()
+    redoStack.current = []
+  }
+
+  const commit = useCallback((updater) => {
+    setBeads((prev) => {
+      const next = updater(prev)
+      if (next === prev) return prev
+      pushHistory(prev)
+      return next
+    })
+  }, [])
+
+  const undo = useCallback(() => {
+    if (!undoStack.current.length) return
+    redoStack.current.push(beadsRef.current)
+    setBeads(undoStack.current.pop())
+  }, [])
+  const redo = useCallback(() => {
+    if (!redoStack.current.length) return
+    undoStack.current.push(beadsRef.current)
+    setBeads(redoStack.current.pop())
+  }, [])
+
+  // desktop keyboard: Ctrl/⌘+Z undo, Ctrl/⌘+Shift+Z redo
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return
+      if (e.target !== document.body) return // don't steal from inputs
+      e.preventDefault()
+      if (e.shiftKey) redo()
+      else undo()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo, redo])
 
   // Per-cell tilt (radians). The weave groups beads in 3s: an upright apex with
   // two base beads leaning outward beneath it. On the half-offset lattice we
@@ -153,7 +216,7 @@ export default function Home() {
   const floodFill = useCallback(
     (cell, useColor = color) => {
       if (!cell) return
-      setBeads((prev) => {
+      commit((prev) => {
         const target = prev.get(key(cell.col, cell.row)) || null
         if (target === useColor) return prev
         const next = new Map(prev)
@@ -183,8 +246,145 @@ export default function Home() {
         return next
       })
     },
-    [color, cols, rows]
+    [color, cols, rows, commit]
   )
+
+  // beads covered by the brush at doc point (x,y): the bead under the cursor for
+  // brush 1, or all existing beads within a radius that grows with brush size.
+  const brushCells = useCallback(
+    (x, y) => {
+      if (brush <= 1) {
+        const n = beadAt(geo, x, y)
+        return n ? [n] : []
+      }
+      const out = []
+      const radius = (brush - 1) * Math.min(geo.Px, geo.Py) * 0.62 + Bw * 0.6
+      const approxRow = Math.round((y - geo.padY) / geo.Py)
+      const approxCol = Math.round((x - geo.padX) / geo.Px)
+      const span = brush + 1
+      for (let row = approxRow - span; row <= approxRow + span; row++) {
+        if (row < 0 || row >= rows) continue
+        for (let col = approxCol - span; col <= approxCol + span; col++) {
+          if (col < 0 || col >= cols) continue
+          if (!beadExists(col, row)) continue
+          const { cx, cy } = geo.centerFor(col, row)
+          const dx = x - cx
+          const dy = y - cy
+          if (dx * dx + dy * dy <= radius * radius) out.push({ col, row })
+        }
+      }
+      return out
+    },
+    [brush, geo, Bw, rows, cols]
+  )
+
+  const paintBrush = useCallback(
+    (x, y, mode) => {
+      const cells = brushCells(x, y)
+      if (!cells.length) return
+      setBeads((prev) => {
+        let next = null
+        for (const { col, row } of cells) {
+          const k = key(col, row)
+          if (mode === 'erase') {
+            if ((next || prev).has(k)) { next = next || new Map(prev); next.delete(k) }
+          } else if ((next || prev).get(k) !== color) {
+            next = next || new Map(prev)
+            next.set(k, color)
+          }
+        }
+        return next || prev
+      })
+    },
+    [brushCells, color]
+  )
+
+  // ---- selection (marquee Select tool) ----
+  const finalizeSelection = useCallback(
+    (rect) => {
+      if (!rect) return
+      const x0 = Math.min(rect.x0, rect.x1)
+      const x1 = Math.max(rect.x0, rect.x1)
+      const y0 = Math.min(rect.y0, rect.y1)
+      const y1 = Math.max(rect.y0, rect.y1)
+      const sel = new Set()
+      const r0 = Math.max(0, Math.floor((y0 - geo.padY) / geo.Py) - 1)
+      const r1 = Math.min(rows, Math.ceil((y1 - geo.padY) / geo.Py) + 1)
+      const c0 = Math.max(0, Math.floor((x0 - geo.padX - geo.rowOffset) / geo.Px) - 1)
+      const c1 = Math.min(cols, Math.ceil((x1 - geo.padX) / geo.Px) + 1)
+      for (let row = r0; row < r1; row++) {
+        for (let col = c0; col < c1; col++) {
+          if (!beadExists(col, row)) continue
+          const { cx, cy } = geo.centerFor(col, row)
+          if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) sel.add(key(col, row))
+        }
+      }
+      setSelection(sel)
+    },
+    [geo, rows, cols]
+  )
+
+  const clearSelection = () => setSelection(new Set())
+
+  const recolorSelection = () => {
+    if (!selection.size) return
+    pushRecent(color)
+    commit((prev) => {
+      const next = new Map(prev)
+      for (const k of selection) next.set(k, color)
+      return next
+    })
+  }
+
+  const deleteSelection = () => {
+    if (!selection.size) return
+    commit((prev) => {
+      const next = new Map(prev)
+      for (const k of selection) next.delete(k)
+      return next
+    })
+    clearSelection()
+  }
+
+  const copySelection = () => {
+    if (!selection.size) return
+    let minC = Infinity
+    let minR = Infinity
+    const cells = []
+    for (const k of selection) {
+      const fill = beads.get(k)
+      if (!fill) continue // copy only filled beads
+      const [c, r] = k.split(',').map(Number)
+      cells.push({ c, r, color: fill })
+      if (c < minC) minC = c
+      if (r < minR) minR = r
+    }
+    if (!cells.length) return
+    // even offsets preserve the weave's apex/base parity on paste
+    minC -= minC % 2
+    minR -= minR % 2
+    setClipboard(cells.map(({ c, r, color }) => ({ dc: c - minC, dr: r - minR, color })))
+  }
+
+  const pasteClipboard = () => {
+    if (!clipboard) return
+    const oc = 2
+    const or = 2 // place shifted by 2 cells (keeps parity) so it's visible
+    commit((prev) => {
+      const next = new Map(prev)
+      const sel = new Set()
+      for (const { dc, dr, color: cc } of clipboard) {
+        const c = dc + oc
+        const r = dr + or
+        if (c < 0 || c >= cols || r < 0 || r >= rows || !beadExists(c, r)) continue
+        const k = key(c, r)
+        next.set(k, cc)
+        sel.add(k)
+      }
+      setSelection(sel)
+      return next
+    })
+  }
 
   // ---- canvas drawing ----
   const canvasRef = useRef(null)
@@ -275,13 +475,43 @@ export default function Home() {
             ctx.fill()
           } else if (drawOutlines) {
             beadPath(ctx, cx, cy, Bw, Bh, tilt)
+            ctx.fillStyle = '#eaeaeb' // very slight grey so empty beads aren't white
+            ctx.fill()
             ctx.stroke()
           }
         }
       }
 
+      // selection highlight (accent ring around selected beads)
+      if (selection.size) {
+        ctx.lineWidth = 2 / scale
+        ctx.strokeStyle = T.accent
+        for (let row = r0; row < r1; row++) {
+          for (let col = c0; col < c1; col++) {
+            if (!beadExists(col, row) || !selection.has(key(col, row))) continue
+            const { cx, cy } = geo.centerFor(col, row)
+            beadPath(ctx, cx, cy, Bw * 1.08, Bh * 1.08, tiltFor(col, row))
+            ctx.stroke()
+          }
+        }
+      }
+
+      // live marquee rectangle
+      if (marquee) {
+        const mx = Math.min(marquee.x0, marquee.x1)
+        const my = Math.min(marquee.y0, marquee.y1)
+        const mw = Math.abs(marquee.x1 - marquee.x0)
+        const mh = Math.abs(marquee.y1 - marquee.y0)
+        ctx.fillStyle = 'rgba(214,0,28,0.08)'
+        ctx.fillRect(mx, my, mw, mh)
+        ctx.lineWidth = 1.5 / scale
+        ctx.strokeStyle = T.accent
+        ctx.setLineDash([6 / scale, 4 / scale])
+        ctx.strokeRect(mx, my, mw, mh)
+        ctx.setLineDash([])
+      }
     },
-    [viewport, view, geo, beads, bg, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR]
+    [viewport, view, geo, beads, bg, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee]
   )
 
   // size the canvas to the viewport (never to the document)
@@ -347,6 +577,7 @@ export default function Home() {
   // ---- pointer interaction ----
   const dragging = useRef(false)
   const panning = useRef(null)
+  const marqueeRef = useRef(null)
   const spaceHeld = useRef(false)
   const [grabbing, setGrabbing] = useState(false)
 
@@ -373,6 +604,29 @@ export default function Home() {
     }
   }, [])
 
+  // ---- iPad touch gestures (locked iPad-pass decisions #1–3) ----
+  // Pencil (pointerType 'pen') and mouse use the active tool. Fingers NEVER
+  // paint: one finger pans, two-finger pinch zooms/pans, and quick multi-finger
+  // taps map to history (2 fingers = undo, 3 = redo) — Procreate conventions.
+  const touchPts = useRef(new Map()) // pointerId -> {x,y,sx,sy} canvas-relative
+  const pinchRef = useRef(null) // {dist, mx, my} of the live 2-finger gesture
+  const tapRef = useRef(null) // {t0, maxN, moved, valid} for tap detection
+
+  const ptFromEvent = (e) => {
+    const r = canvasRef.current.getBoundingClientRect()
+    return { x: e.clientX - r.left, y: e.clientY - r.top }
+  }
+
+  const startPinchIfTwo = () => {
+    if (touchPts.current.size !== 2) { pinchRef.current = null; return }
+    const [a, b] = [...touchPts.current.values()]
+    pinchRef.current = {
+      dist: Math.hypot(b.x - a.x, b.y - a.y) || 1,
+      mx: (a.x + b.x) / 2,
+      my: (a.y + b.y) / 2,
+    }
+  }
+
   const docFromEvent = (e) => {
     const rect = canvasRef.current.getBoundingClientRect()
     return {
@@ -380,22 +634,66 @@ export default function Home() {
       y: (e.clientY - rect.top - view.ty) / view.scale,
     }
   }
-  const cellFromEvent = (e) => {
-    const { x, y } = docFromEvent(e)
-    return beadAt(geo, x, y)
-  }
 
   const onPointerDown = (e) => {
     e.preventDefault()
     canvasRef.current.setPointerCapture?.(e.pointerId)
+    if (e.pointerType === 'touch') {
+      if (dragging.current || marqueeRef.current) return // palm while pencil draws
+      const p = ptFromEvent(e)
+      touchPts.current.set(e.pointerId, { ...p, sx: p.x, sy: p.y })
+      const n = touchPts.current.size
+      if (n === 1) tapRef.current = { t0: Date.now(), maxN: 1, moved: false, valid: true }
+      else if (tapRef.current) tapRef.current.maxN = Math.max(tapRef.current.maxN, n)
+      panning.current = n === 1 ? { x: e.clientX, y: e.clientY } : null
+      startPinchIfTwo()
+      dragging.current = false
+      return
+    }
     if (spaceHeld.current || e.button === 1) {
       panning.current = { x: e.clientX, y: e.clientY }
       return
     }
+    const p = docFromEvent(e)
+    if (tool === 'select') {
+      marqueeRef.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }
+      setMarquee(marqueeRef.current)
+      return
+    }
     dragging.current = true
-    paintBead(cellFromEvent(e), tool)
+    strokeBase.current = beadsRef.current // history: snapshot at stroke start
+    if (tool === 'draw') pushRecent(color)
+    paintBrush(p.x, p.y, tool)
   }
+
   const onPointerMove = (e) => {
+    if (e.pointerType === 'touch') {
+      const rec = touchPts.current.get(e.pointerId)
+      if (!rec) return
+      const p = ptFromEvent(e)
+      rec.x = p.x
+      rec.y = p.y
+      if (tapRef.current && Math.hypot(p.x - rec.sx, p.y - rec.sy) > 12) {
+        tapRef.current.moved = true
+      }
+      if (pinchRef.current && touchPts.current.size === 2) {
+        // pinch: zoom by the distance ratio around the midpoint, pan by the
+        // midpoint drift — the doc point between the fingers stays pinched.
+        const [a, b] = [...touchPts.current.values()]
+        const dist = Math.hypot(b.x - a.x, b.y - a.y) || 1
+        const mx = (a.x + b.x) / 2
+        const my = (a.y + b.y) / 2
+        const g = pinchRef.current
+        setView((v) => {
+          const ns = clampNum(v.scale * (dist / g.dist), 0.02, 8)
+          const k = ns / v.scale
+          return { scale: ns, tx: mx - (g.mx - v.tx) * k, ty: my - (g.my - v.ty) * k }
+        })
+        pinchRef.current = { dist, mx, my }
+        return
+      }
+      // single finger falls through to the shared pan block
+    }
     if (panning.current) {
       const dx = e.clientX - panning.current.x
       const dy = e.clientY - panning.current.y
@@ -403,12 +701,78 @@ export default function Home() {
       setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }))
       return
     }
-    if (dragging.current) paintBead(cellFromEvent(e), tool)
+    if (marqueeRef.current) {
+      const p = docFromEvent(e)
+      marqueeRef.current = { ...marqueeRef.current, x1: p.x, y1: p.y }
+      setMarquee(marqueeRef.current)
+      return
+    }
+    if (dragging.current) {
+      const p = docFromEvent(e)
+      paintBrush(p.x, p.y, tool)
+    }
   }
+
   const endDrag = () => {
+    if (marqueeRef.current) {
+      finalizeSelection(marqueeRef.current)
+      marqueeRef.current = null
+      setMarquee(null)
+    }
+    // history: commit the stroke as ONE undo step, only if it changed beads
+    if (strokeBase.current && strokeBase.current !== beadsRef.current) {
+      pushHistory(strokeBase.current)
+    }
+    strokeBase.current = null
     dragging.current = false
     panning.current = null
   }
+
+  const liftTouch = (e, { allowTap }) => {
+    touchPts.current.delete(e.pointerId)
+    if (touchPts.current.size === 0) {
+      const t = tapRef.current
+      tapRef.current = null
+      pinchRef.current = null
+      panning.current = null
+      if (allowTap && t && t.valid && !t.moved && Date.now() - t.t0 < 350) {
+        if (t.maxN === 2) undo()
+        else if (t.maxN === 3) redo()
+      }
+    } else {
+      startPinchIfTwo()
+      panning.current = null
+    }
+  }
+
+  const onPointerUp = (e) => {
+    if (e.pointerType === 'touch') return liftTouch(e, { allowTap: true })
+    endDrag()
+  }
+  const onPointerCancel = (e) => {
+    if (e.pointerType === 'touch') {
+      if (tapRef.current) tapRef.current.valid = false
+      return liftTouch(e, { allowTap: false })
+    }
+    endDrag()
+  }
+
+  // iOS Safari fires proprietary gesture events for pinches; kill them so the
+  // PAGE never zooms — only our canvas transform does. touch-action:none on the
+  // canvas covers pointer defaults; this covers the rest.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const prevent = (e) => e.preventDefault()
+    canvas.addEventListener('gesturestart', prevent)
+    canvas.addEventListener('gesturechange', prevent)
+    canvas.addEventListener('gestureend', prevent)
+    return () => {
+      canvas.removeEventListener('gesturestart', prevent)
+      canvas.removeEventListener('gesturechange', prevent)
+      canvas.removeEventListener('gestureend', prevent)
+    }
+  }, [])
 
   // drag a colour swatch from the palette onto the canvas to flood-fill a region.
   // Use nearestBead so a drop in a gap still fills the closest bead's region.
@@ -471,8 +835,8 @@ export default function Home() {
   }
 
   const clearCanvas = () => {
-    if (window.confirm('Clear the whole canvas? This cannot be undone.')) {
-      setBeads(new Map())
+    if (window.confirm('Clear the whole canvas?')) {
+      commit((prev) => (prev.size ? new Map() : prev))
     }
   }
 
@@ -495,7 +859,13 @@ export default function Home() {
       if (!raw) return
       const d = JSON.parse(raw)
       if (d.canvasCm) setCanvasCm(d.canvasCm)
-      if (d.beadMM) setBeadMM(d.beadMM)
+      // snap to the nearest offered size (older saves may hold the removed 1.5mm)
+      if (d.beadMM) {
+        const s = BEAD_SIZES.reduce((a, b) =>
+          Math.abs(b.w - d.beadMM.w) < Math.abs(a.w - d.beadMM.w) ? b : a
+        )
+        setBeadMM({ w: s.w, h: s.h })
+      }
       if (Array.isArray(d.palette)) setPalette(d.palette)
       if (d.bg) setBg(d.bg)
       if (Array.isArray(d.beads)) setBeads(new Map(d.beads))
@@ -511,23 +881,38 @@ export default function Home() {
         <div className="brand">BEADWORK<span className="dot" /></div>
         <div className="sub">3-BEAD TECHNIQUE</div>
 
-        {/* Tools — primary action, given primary weight */}
-        <div className="tools">
-          {[
-            ['draw', 'Draw', <IconDraw key="d" />],
-            ['erase', 'Erase', <IconErase key="e" />],
-          ].map(([id, label, icon]) => (
-            <button
-              key={id}
-              className={`toolBtn ${tool === id ? 'on' : ''}`}
-              onClick={() => setTool(id)}
-              title={label}
-            >
-              {icon}
-              <span>{label}</span>
-            </button>
-          ))}
-        </div>
+        {tool !== 'select' && (
+          <div className="brushRow">
+            <span className="brushLabel">Brush</span>
+            <input
+              className="slider"
+              type="range"
+              min="1"
+              max="6"
+              step="1"
+              value={brush}
+              onChange={(e) => setBrush(+e.target.value)}
+            />
+            <span className="brushVal">{brush}</span>
+          </div>
+        )}
+
+        {(tool === 'select' || selection.size > 0) && (
+          <div className="card selCard">
+            <div className="cardTitle">Selection · {selection.size}</div>
+            <div className="pillRow">
+              <button className="ghost" onClick={recolorSelection} disabled={!selection.size}>Recolour</button>
+              <button className="ghost" onClick={deleteSelection} disabled={!selection.size}>Delete</button>
+            </div>
+            <div className="pillRow">
+              <button className="ghost" onClick={copySelection} disabled={!selection.size}>Copy</button>
+              <button className="ghost" onClick={pasteClipboard} disabled={!clipboard}>Paste</button>
+            </div>
+            {selection.size > 0 && <button className="ghost" onClick={clearSelection}>Clear selection</button>}
+            <div className="hint tip">Drag a box over the beads to select them.</div>
+          </div>
+        )}
+
         <div className="hint tip">Drag a palette colour onto the canvas to fill a region.</div>
 
         <div className="card">
@@ -536,7 +921,7 @@ export default function Home() {
             <Pill value={canvasCm.w} label="cm W" onChange={(v) => setCanvasCm((c) => ({ ...c, w: clampNum(v, 1, 300) }))} />
             <Pill value={canvasCm.h} label="cm H" onChange={(v) => setCanvasCm((c) => ({ ...c, h: clampNum(v, 1, 300) }))} />
           </div>
-          <div className="hint">≈ {cols} × {rows} beads · scroll to zoom · space-drag to pan</div>
+          <div className="hint">≈ {cols} × {rows} beads · pinch / scroll to zoom · finger / space-drag to pan · 2-finger tap undo · 3-finger tap redo</div>
           <button className="ghost" onClick={clearCanvas}>Clear canvas</button>
         </div>
 
@@ -595,11 +980,34 @@ export default function Home() {
             className={`board ${grabbing ? 'grab' : ''}`}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
-            onPointerUp={endDrag}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerCancel}
             onDragOver={onCanvasDragOver}
             onDrop={onCanvasDrop}
           />
+          {/* floating tool strip — right edge, under a right-handed iPad user's
+              hand (locked iPad-pass decision #4). Big ≥44px touch targets. */}
+          <div className="toolStrip">
+            {[
+              ['draw', 'Draw', <IconDraw key="d" />],
+              ['erase', 'Erase', <IconErase key="e" />],
+              ['select', 'Select', <IconSelect key="s" />],
+            ].map(([id, label, icon]) => (
+              <button
+                key={id}
+                className={`stripBtn ${tool === id ? 'on' : ''}`}
+                onClick={() => setTool(id)}
+                title={label}
+              >
+                {icon}
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
           <div className="zoomCtl">
+            <button onClick={undo} title="Undo — 2-finger tap or Ctrl+Z">↶</button>
+            <button onClick={redo} title="Redo — 3-finger tap or Ctrl+Shift+Z">↷</button>
+            <span className="zsep" />
             <button onClick={() => zoomAt(1 / 1.2, viewport.w / 2, viewport.h / 2)} title="Zoom out">−</button>
             <button className="zval" onClick={fitView} title="Fit to screen">{Math.round(view.scale * 100)}%</button>
             <button onClick={() => zoomAt(1.2, viewport.w / 2, viewport.h / 2)} title="Zoom in">+</button>
@@ -610,8 +1018,10 @@ export default function Home() {
         </div>
       </main>
 
-      {/* RIGHT panel — colour & output */}
+      {/* RIGHT panel — colour & output. Content scrolls; the save cluster stays
+          pinned at the bottom so a big palette can't push it away (iPad pass #6). */}
       <aside className="panel right">
+        <div className="panelScroll">
 
         {/* Colour */}
         <div className="card">
@@ -625,6 +1035,24 @@ export default function Home() {
             />
             <Pill value={color} label="hex" text onChange={(v) => setColor(v)} />
           </div>
+          {recentColors.length > 0 && (
+            <>
+              <div className="cardTitle small">Recent</div>
+              <div className="swatches">
+                {recentColors.map((c, i) => (
+                  <button
+                    key={i}
+                    className={`sw ${c === color ? 'on' : ''}`}
+                    style={{ background: c }}
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('text/plain', c)}
+                    onClick={() => setColor(c)}
+                    title={c}
+                  />
+                ))}
+              </div>
+            </>
+          )}
           <div className="cardTitle small">Palette</div>
           <div className="swatches">
             {palette.map((c, i) => (
@@ -699,12 +1127,15 @@ export default function Home() {
             ))}
           </div>
           <div className="hint">One sheet · outlined beads · numbers + guides every 10 · colour key.</div>
-          <button className="ghost" onClick={exportPNG}>Save PNG</button>
         </div>
 
-        <div className="spacer" />
-        <div className="hint tip">{savedAt ? 'Saved — reopens here for editing.' : 'Saves in this browser; reopens for editing.'}</div>
-        <button className="primary" onClick={saveArtwork}>{savedAt ? 'Saved ✓ — save again' : 'Save artwork'}</button>
+        </div>
+
+        <div className="saveCluster">
+          <button className="primary" onClick={exportPNG}>Save PNG</button>
+          <button className="ghost" onClick={saveArtwork}>{savedAt ? 'Saved ✓ — save again' : 'Save artwork'}</button>
+          <div className="hint tip">{savedAt ? 'Design saved — reopens here for editing.' : 'Save artwork keeps the design in this browser.'}</div>
+        </div>
       </aside>
 
       <style jsx global>{`
@@ -714,6 +1145,13 @@ export default function Home() {
           color: ${T.ink};
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Avenir,
             Helvetica, sans-serif;
+          /* iPad: no rubber-band scroll, no double-tap zoom, no text selection
+             while drawing — the canvas owns all touch gestures */
+          overscroll-behavior: none;
+          touch-action: manipulation;
+          -webkit-user-select: none;
+          user-select: none;
+          -webkit-tap-highlight-color: transparent;
         }
         * { box-sizing: border-box; }
       `}</style>
@@ -747,6 +1185,30 @@ export default function Home() {
         }
         .zoomCtl button:hover { background: #1d1d1d; }
         .zoomCtl .zval { width: 54px; font-size: 11px; }
+        .zsep { width: 1px; height: 18px; background: ${T.line}; margin: 0 3px; }
+
+        /* floating Draw/Erase/Select strip — right edge, ≥44px touch targets */
+        .toolStrip {
+          position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+          display: flex; flex-direction: column; gap: 5px;
+          background: ${T.panelSolid}; border: 1px solid ${T.line};
+          border-radius: ${T.radius}px; padding: 5px;
+        }
+        .stripBtn {
+          width: 56px; height: 56px;
+          display: flex; flex-direction: column; align-items: center;
+          justify-content: center; gap: 4px;
+          border: none; background: none; color: ${T.inkSoft};
+          border-radius: 5px; cursor: pointer;
+          font-family: ${T.mono}; font-size: 8px; text-transform: uppercase;
+          letter-spacing: 0.08em; transition: all 0.12s;
+        }
+        .stripBtn:hover { color: ${T.ink}; background: #1d1d1d; }
+        .stripBtn.on {
+          color: ${T.ink}; background: #161616;
+          box-shadow: inset 0 0 0 1px ${T.accent};
+        }
+        .stripBtn.on svg { color: ${T.accent}; }
         .stageInfo {
           flex-shrink: 0; color: ${T.inkSoft}; font-size: 10px; font-family: ${T.mono};
           text-transform: uppercase; letter-spacing: 0.08em;
@@ -761,9 +1223,17 @@ export default function Home() {
           padding: 18px 14px; overflow: hidden;
           display: flex; flex-direction: column; gap: 11px;
         }
-        .panel.left { border-right: 1px solid ${T.line}; }
+        .panel.left { border-right: 1px solid ${T.line}; overflow-y: auto; }
         .panel.right { border-left: 1px solid ${T.line}; }
-        .spacer { flex: 1 1 auto; min-height: 4px; }
+        /* right panel: cards scroll, the save cluster below stays pinned */
+        .panelScroll {
+          flex: 1 1 auto; min-height: 0; overflow-y: auto;
+          display: flex; flex-direction: column; gap: 11px;
+        }
+        .saveCluster {
+          flex-shrink: 0; display: flex; flex-direction: column; gap: 7px;
+          padding-top: 11px; border-top: 1px solid ${T.line};
+        }
         .brand {
           font-size: 18px; font-weight: 700; letter-spacing: 0.04em;
           font-family: ${T.mono}; display: inline-flex; align-items: center;
@@ -775,22 +1245,24 @@ export default function Home() {
         .sub { color: ${T.inkSoft}; font-size: 10px; margin-top: -8px;
           font-family: ${T.mono}; letter-spacing: 0.12em; }
 
-        /* Tools: the primary action, given primary visual weight */
-        .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
-        .toolBtn {
-          display: flex; flex-direction: column; align-items: center; gap: 6px;
-          padding: 14px 8px; border: 1px solid ${T.line}; background: ${T.panelSolid};
-          color: ${T.inkSoft}; border-radius: ${T.radius}px; cursor: pointer;
-          font-family: ${T.mono}; font-size: 10px; text-transform: uppercase;
-          letter-spacing: 0.1em; transition: all 0.12s;
-        }
-        .toolBtn:hover { color: ${T.ink}; background: #161616; }
-        .toolBtn.on {
-          color: ${T.ink}; background: #161616; border-color: ${T.accent};
-          box-shadow: inset 0 0 0 1px ${T.accent};
-        }
-        .toolBtn.on svg { color: ${T.accent}; }
         .tip { color: ${T.inkSoft}; opacity: 0.8; }
+
+        /* brush size slider */
+        .brushRow { display: flex; align-items: center; gap: 10px; padding: 2px 2px; }
+        .brushLabel { font-family: ${T.mono}; font-size: 10px; text-transform: uppercase;
+          letter-spacing: 0.1em; color: ${T.inkSoft}; }
+        .brushVal { font-family: ${T.mono}; font-size: 12px; color: ${T.ink}; width: 12px; text-align: right; }
+        .slider { flex: 1; -webkit-appearance: none; appearance: none; height: 3px;
+          background: ${T.line}; border-radius: 3px; outline: none; }
+        .slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+          width: 14px; height: 14px; border-radius: 50%; background: ${T.ink}; cursor: pointer; }
+        .slider::-moz-range-thumb { width: 14px; height: 14px; border: none; border-radius: 50%;
+          background: ${T.ink}; cursor: pointer; }
+
+        /* selection actions */
+        .selCard .pillRow { gap: 7px; }
+        .ghost:disabled { opacity: 0.35; cursor: not-allowed; }
+        .ghost:disabled:hover { background: ${T.pill}; }
 
         /* accessibility: clear keyboard focus ring on every control */
         .panel button:focus-visible, .panel input:focus-visible,
@@ -867,7 +1339,7 @@ export default function Home() {
         }
         .ghost:hover, .fileBtn:hover { background: #1d1d1d; }
         .primary {
-          margin-top: auto; padding: 14px; border: none; cursor: pointer;
+          padding: 14px; border: none; cursor: pointer;
           background: ${T.accent}; color: #ffffff;
           border-radius: ${T.radius}px; font-size: 12px; font-weight: 700;
           font-family: ${T.mono}; text-transform: uppercase; letter-spacing: 0.1em;
@@ -897,6 +1369,14 @@ function IconErase() {
       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M20 20H7L3 16a2 2 0 010-3l9-9a2 2 0 013 0l5 5a2 2 0 010 3l-7 8" />
       <path d="M9 11l5 5" />
+    </svg>
+  )
+}
+function IconSelect() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="3 3">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
     </svg>
   )
 }

@@ -55,6 +55,15 @@ context. The `/grill-me` skill reads and appends to this file.
 - Layout: single scrollable column of clear cards (no icon-tab row), muted tokens.
 - Orientation toggle removed (woven is locked); keep `orient='woven'` internally.
 
+## Deployment
+- Live: **https://part-time-artist.github.io/Beadworks/** (GitHub Pages, `gh-pages`
+  branch). Repo: `part-time-artist/Beadworks`, source on `master`.
+- `vite.config.js` `base: '/Beadworks/'` (must match the repo name).
+- Redeploy: `npm run build`, then publish `dist/` to `gh-pages` (worktree):
+  `git worktree add -B gh-pages ../bw-ghpages origin/gh-pages` → clear it →
+  `cp -r dist/. ../bw-ghpages/` → `touch .nojekyll` → commit + push gh-pages →
+  `git worktree remove ../bw-ghpages --force`. No CNAME.
+
 ## Stack — MIGRATED (Vite + React 18)
 - Moved off the 2019 Next 9 / React 16 fork → **Vite 5 + React 18**. App lives in
   `src/App.jsx` + `src/lib/{geometry,chart}.js`; entry `index.html` + `src/main.jsx`.
@@ -117,6 +126,31 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
   fixes "can't open/use saved palettes easily".
 - **Two-panel layout** (no panel scrolling): LEFT = tools + canvas + bead +
   background; RIGHT = colour/palette + export + save. Canvas in the middle.
+
+## Editing features (latest)
+- **Select tool** (marquee): drag a box → selects existing beads in it; actions
+  Recolour / Delete / Copy / Paste (paste offset by 2 cells, parity-preserving).
+  Selected beads get an accent ring; live marquee drawn dashed.
+- **Brush size** slider (1–6): brush>1 paints all beads within a growing radius.
+- **Recent colours** (up to 5), auto-tracked on draw/fill, shown above the palette.
+- **Empty beads** drawn very-slight grey (#eaeaeb), not white.
+
+## iPad / Apple Pencil pass (locked 2026-06-10)
+1. Primary device is **iPad + Apple Pencil**. Pencil (and desktop mouse) draws;
+   **single-finger drag pans only** (Procreate-style — no stray marks).
+2. **2-finger pinch = zoom toward gesture midpoint + pan** (replaces nothing on
+   desktop: wheel-zoom and space-drag stay).
+3. **2-finger tap = undo, 3-finger tap = redo.** Undo history = bead edits only
+   (one stroke = one step), capped at 50. Small ↶/↷ buttons sit in the zoom
+   control for desktop; Ctrl/⌘+Z and Ctrl/⌘+Shift+Z also work.
+4. Tools (Draw/Erase/Select) move to a **floating vertical strip on the right
+   edge of the canvas** — under a right-handed user's hand, ≥44px touch targets.
+   (Pencil double-tap gesture is not exposed to web apps, so on-screen it is.)
+5. Bead density: the 1.5 mm size is **replaced by "1 mm" (1.05 × 1.3125 mm)**,
+   giving exactly **6 beads (3 pairs) per cm** of row pitch. 3 mm stays.
+6. Right panel: content **scrolls**; **Save PNG (red primary) + Save artwork**
+   are clubbed and **pinned at the bottom** (overrides "no panel scrolling").
+   Save PNG is now the highlighted action, not Save artwork.
 
 ## Drag-to-fill
 - Dropping a palette colour anywhere fills the **nearest** bead's region
