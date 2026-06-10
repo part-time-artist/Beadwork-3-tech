@@ -55,14 +55,18 @@ context. The `/grill-me` skill reads and appends to this file.
 - Layout: single scrollable column of clear cards (no icon-tab row), muted tokens.
 - Orientation toggle removed (woven is locked); keep `orient='woven'` internally.
 
-## Deployment
-- Live: **https://part-time-artist.github.io/Beadworks/** (GitHub Pages, `gh-pages`
-  branch). Repo: `part-time-artist/Beadworks`, source on `master`.
-- `vite.config.js` `base: '/Beadworks/'` (must match the repo name).
-- Redeploy: `npm run build`, then publish `dist/` to `gh-pages` (worktree):
-  `git worktree add -B gh-pages ../bw-ghpages origin/gh-pages` → clear it →
-  `cp -r dist/. ../bw-ghpages/` → `touch .nojekyll` → commit + push gh-pages →
-  `git worktree remove ../bw-ghpages --force`. No CNAME.
+## Deployment (CORRECTED 2026-06-10 — the tool lives on Beadwork-3-tech)
+- Live: **https://part-time-artist.github.io/Beadwork-3-tech/** (GitHub Pages,
+  `gh-pages` branch). Repo: `part-time-artist/Beadwork-3-tech` = git remote
+  **`newtool`**. The old `origin` (`part-time-artist/Beadworks`) hosts a
+  DIFFERENT site — **never deploy the tool there** (done by mistake once,
+  restored to `7095d37`).
+- `vite.config.js` `base: '/Beadwork-3-tech/'` in production (must match repo).
+- Redeploy: `npm run build`, then publish `dist/` via worktree:
+  `git fetch newtool gh-pages` → `git worktree add --detach ../bw-ghp-new
+  newtool/gh-pages` → clear it → `cp -r dist/. ../bw-ghp-new/` →
+  `touch .nojekyll` → commit → `git push newtool HEAD:gh-pages` →
+  `git worktree remove ../bw-ghp-new --force`. No CNAME.
 
 ## Stack — MIGRATED (Vite + React 18)
 - Moved off the 2019 Next 9 / React 16 fork → **Vite 5 + React 18**. App lives in
