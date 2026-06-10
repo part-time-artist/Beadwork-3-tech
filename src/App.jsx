@@ -184,6 +184,7 @@ export default function Home() {
   // fit, so the reference design can be positioned under the beads. While
   // bgAdjust is on, canvas gestures move/resize the IMAGE instead of painting.
   const [bgT, setBgT] = useState({ x: 0, y: 0, scale: 1 })
+  const [bgShown, setBgShown] = useState(true) // hide ⇒ falls back to the solid colour
   const [bgAdjust, setBgAdjust] = useState(false)
   const bgAdjustRef = useRef(false)
   bgAdjustRef.current = bgAdjust
@@ -443,11 +444,12 @@ export default function Home() {
       // everything below is in document space (pan + zoom baked into the transform)
       ctx.setTransform(DPR * scale, 0, 0, DPR * scale, tx * DPR, ty * DPR)
 
-      // document background
-      if (bg.type === 'solid') {
+      // document background (a hidden image falls back to the solid colour)
+      const imageShowing = bg.type === 'image' && bgShown && bgImgRef.current
+      if (bg.type === 'solid' || (bg.type === 'image' && !imageShowing)) {
         ctx.fillStyle = bg.color
         ctx.fillRect(0, 0, docW, docH)
-      } else if (bg.type === 'image' && bgImgRef.current) {
+      } else if (imageShowing) {
         const img = bgImgRef.current
         const s = Math.max(docW / img.width, docH / img.height) * bgT.scale
         const dw = img.width * s
@@ -499,9 +501,9 @@ export default function Home() {
             ctx.fill()
           } else if (drawOutlines) {
             beadPath(ctx, cx, cy, Bw, Bh, tilt)
-            // over a reference image, empty beads are outline-only so the
-            // design underneath stays visible; otherwise a very slight grey
-            if (bg.type !== 'image') {
+            // over a visible reference image, empty beads are outline-only so
+            // the design underneath stays visible; otherwise a very slight grey
+            if (!imageShowing) {
               ctx.fillStyle = '#eaeaeb'
               ctx.fill()
             }
@@ -539,7 +541,7 @@ export default function Home() {
         ctx.setLineDash([])
       }
     },
-    [viewport, view, geo, beads, bg, bgT, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee]
+    [viewport, view, geo, beads, bg, bgT, bgShown, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee]
   )
 
   // size the canvas to the viewport (never to the document)
@@ -989,6 +991,7 @@ export default function Home() {
       bgImgRef.current = img
       setBg((b) => ({ ...b, type: 'image', image: url }))
       setBgT({ x: 0, y: 0, scale: 1 })
+      setBgShown(true)
       setBgAdjust(true) // go straight into placing the reference design
     }
     img.src = url
@@ -998,6 +1001,8 @@ export default function Home() {
   const chartBackground = () => {
     if (exportBg === 'transparent') return { type: 'transparent' }
     if (bg.type === 'image') {
+      // a hidden image exports as the solid colour, same as on screen
+      if (!bgShown || !bgImgRef.current) return { type: 'solid', color: bg.color }
       // pass the placement as FRACTIONS of the doc size so the chart (which
       // rasterises at a different pixel scale) reproduces the same alignment
       return {
@@ -1045,7 +1050,7 @@ export default function Home() {
   // ---- save artwork: persist in the tool so it reopens for editing next time ----
   const [savedAt, setSavedAt] = useState(null)
   const saveArtwork = () => {
-    const data = { version: 1, canvasCm, beadMM, palette, bg, bgT, beads: [...beads.entries()] }
+    const data = { version: 1, canvasCm, beadMM, palette, bg, bgT, bgShown, beads: [...beads.entries()] }
     try {
       localStorage.setItem(DESIGN_KEY, JSON.stringify(data))
       setSavedAt(Date.now())
@@ -1072,6 +1077,7 @@ export default function Home() {
       // older saves may hold the removed on-screen transparent background
       if (d.bg) setBg(d.bg.type === 'transparent' ? { ...d.bg, type: 'solid' } : d.bg)
       if (d.bgT) setBgT(d.bgT)
+      if (typeof d.bgShown === 'boolean') setBgShown(d.bgShown)
       if (Array.isArray(d.beads)) applyBeads(new Map(d.beads))
     } catch (e) {}
   }, [])
@@ -1174,9 +1180,30 @@ export default function Home() {
                 <input type="file" accept="image/png,image/jpeg" style={{ display: 'none' }} onChange={(e) => onBgImage(e.target.files[0])} />
               </label>
               {bg.image && (
-                <button className="ghost" onClick={() => setBgAdjust((v) => !v)}>
-                  {bgAdjust ? 'Done adjusting' : 'Adjust image'}
-                </button>
+                <div className="pillRow">
+                  <button
+                    className="ghost half"
+                    onClick={() => {
+                      setBgShown((v) => !v)
+                      setBgAdjust(false) // hiding the image ends adjust mode
+                    }}
+                  >
+                    {bgShown ? 'Hide image' : 'Show image'}
+                  </button>
+                  <button
+                    className="ghost half"
+                    disabled={!bgShown}
+                    onClick={() => setBgAdjust((v) => !v)}
+                  >
+                    {bgAdjust ? 'Done' : 'Adjust'}
+                  </button>
+                </div>
+              )}
+              {!bgShown && (
+                <div className="colorTop" style={{ marginTop: 4 }}>
+                  <input type="color" value={bg.color} onChange={(e) => setBg((b) => ({ ...b, color: e.target.value }))} className="bigSwatch" />
+                  <Pill value={bg.color} label="hex" text onChange={(v) => setBg((b) => ({ ...b, color: v }))} />
+                </div>
               )}
             </>
           )}
@@ -1595,6 +1622,7 @@ export default function Home() {
           font-weight: 600; text-align: center; display: block; transition: background 0.12s;
         }
         .ghost:hover, .fileBtn:hover { background: #1d1d1d; }
+        .ghost.half { flex: 1; min-width: 0; }
         .primary {
           padding: 14px; border: none; cursor: pointer;
           background: ${T.accent}; color: #ffffff;

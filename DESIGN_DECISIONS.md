@@ -182,6 +182,9 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
 - Placement is saved with the artwork and **reproduced in the PNG export**
   (passed as fractions of the bead area → chart.js `paintImageBackground`).
 - In adjust mode painting/undo-taps are suspended; gestures act on the image.
+- **Show/Hide toggle**: hiding the image falls back to the solid colour (the
+  colour picker appears in the card while hidden); placement is kept, Adjust
+  is disabled, and a hidden image exports as the solid colour too.
 
 ## UI fixes pass (2026-06-10)
 - On-screen background: **solid colour / image only** — transparent is an
