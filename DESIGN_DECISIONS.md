@@ -8,9 +8,11 @@ context. The `/grill-me` skill reads and appends to this file.
 - Same-row pitch 127 → `PACK_X = 1.59` (× bead width).
 - Apex-to-apex row pitch 175.5 → `PACK_Y = 0.875` (× bead height).
 - Base beads tilt **±45°** (from `Frame 3`, the canonical 3-bead unit).
-- Tilt alternates by **ROW, not column** (corrected 2026-06-10, see
-  `assets/rows explaination.png`): every bead in one tilted row leans the same
-  way; successive tilted rows alternate +45/−45. Apex rows stay upright.
+- Tilt pattern (corrected ×2 on 2026-06-10, see `assets/rows explaination.png`):
+  apex rows upright; in tilted rows neighbouring beads MIRROR each other
+  (+45/−45 alternating along the row) and the phase flips row to row, so
+  alternate beads down each column mirror too — checkerboard of mirrored pairs.
+  `tiltFor`: `((row+1)/2 + col) % 2`.
 - Lattice occupancy: base rows (odd) fully packed; **apex rows (even) half-density**
   — node exists iff `(col + row/2)` is odd (`beadExists` in `lib/geometry.js`).
 

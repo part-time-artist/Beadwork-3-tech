@@ -122,7 +122,7 @@ Your whole artwork is a **Map** (a dictionary): key `"col,row"` → colour hex. 
 
 ### `tiltFor(col, row)` — the woven look
 
-Even rows (apex beads) stand upright. Odd rows lean **±45° as whole rows**: every bead in one tilted row leans the same way, and the next tilted row leans the opposite way, alternating down the fabric (per `assets/rows explaination.png`). One tiny function gives the whole canvas its weave texture.
+Even rows (apex beads) stand upright. In tilted (odd) rows, **neighbouring beads mirror each other** — +45°, −45°, +45° along the row — and the pattern flips phase from one tilted row to the next, so alternate beads down a column mirror too. The result is a checkerboard of mirrored pairs cupping each upright bead (per `assets/rows explaination.png`). The whole pattern is one line of arithmetic: `((row+1)/2 + col) % 2` decides the sign — even/odd sums make the two lean directions.
 
 ### The view: zoom & pan like Figma
 

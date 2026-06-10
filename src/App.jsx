@@ -159,17 +159,17 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKey)
   }, [undo, redo])
 
-  // Per-cell tilt (radians). Apex (even) rows upright; tilted (odd) rows lean
-  // ±45° as WHOLE ROWS, alternating row by row (assets/rows explaination.png).
+  // Per-cell tilt (radians). Apex (even) rows upright. Tilted (odd) rows:
+  // neighbouring beads MIRROR each other (+45/−45 alternating along the row),
+  // and the pattern also flips row to row, so alternate beads down each column
+  // mirror too — a checkerboard of mirrored pairs (assets/rows explaination.png
+  // + user correction 2026-06-10).
   const tiltFor = useCallback(
     (col, row) => {
       if (orient !== 'woven') return 0
       if (row % 2 === 0) return 0 // apex rows: upright
       const A = Math.PI / 4 // ±45°
-      // Tilted rows alternate direction ROW by ROW — every bead in one tilted
-      // row leans the same way, the next tilted row leans the other way
-      // (assets/rows explaination.png). Base rows are 1,3,5… → (row+1)/2 parity.
-      return ((row + 1) / 2) % 2 === 1 ? A : -A
+      return ((row + 1) / 2 + col) % 2 === 1 ? A : -A
     },
     [orient]
   )
