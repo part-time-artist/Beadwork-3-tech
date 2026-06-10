@@ -169,7 +169,7 @@ export default function Home() {
       if (orient !== 'woven') return 0
       if (row % 2 === 0) return 0 // apex rows: upright
       const A = Math.PI / 4 // ±45°
-      return ((row + 1) / 2 + col) % 2 === 1 ? A : -A
+      return ((row + 1) / 2 + col) % 2 === 1 ? -A : A // flipped per user 2026-06-10
     },
     [orient]
   )
