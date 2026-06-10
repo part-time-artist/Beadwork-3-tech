@@ -112,6 +112,9 @@ const [beads, setBeads] = useState(() => new Map())
 
 Your whole artwork is a **Map** (a dictionary): key `"col,row"` → colour hex. `"4,7" → "#7A2E2E"` means "bead at column 4, row 7 is dark red". Unfilled beads simply aren't in the Map. That's why saving is trivial — it's just a small list of address→colour pairs.
 
+> [!warning] A real bug worth learning from: stale state
+> React doesn't update the screen (or its state) the instant you call `setBeads` — it batches work and can lag many frames behind a fast Apple Pencil (240 events/second). Code that *read* the design from React's render-time state at the start of a new stroke could grab an **out-of-date Map** — and since line-snapping rebuilds the design as "old state + new line", the previous stroke vanished. The fix: every write now goes through one function, `applyBeads`, which updates a plain reference (`beadsRef`) **synchronously** before telling React. Anything that needs "the design right now" reads `beadsRef`, never the render-time value. Lesson: *UI state is for drawing the screen; fast-moving truth needs a synchronous home.*
+
 ### Physical model → screen size
 
 - `beadMM` (1 mm or 3 mm beads) + `canvasCm` → `cols, rows` via `beadCountFromCm`. The "1 mm" bead is really 1.05 mm wide so that one cm of row holds **exactly 6 beads (3 pairs)** — pitch = 1.59 × 1.05 ≈ 1.67 mm, and 10 ÷ 1.67 = 6.
@@ -119,7 +122,7 @@ Your whole artwork is a **Map** (a dictionary): key `"col,row"` → colour hex. 
 
 ### `tiltFor(col, row)` — the woven look
 
-Even rows (apex beads) stand upright; odd-row beads lean **±45°**, alternating by column — the two base beads leaning toward the apex above them. One tiny function gives the whole canvas its herringbone weave texture.
+Even rows (apex beads) stand upright. Odd rows lean **±45° as whole rows**: every bead in one tilted row leans the same way, and the next tilted row leans the opposite way, alternating down the fabric (per `assets/rows explaination.png`). One tiny function gives the whole canvas its weave texture.
 
 ### The view: zoom & pan like Figma
 
@@ -155,7 +158,7 @@ Every press/move/release arrives as a **pointer event** carrying a `pointerType`
 
 ### Straight-line snapping
 
-While you drag a stroke, the code keeps the list of points your pencil passed through (`strokeRef`). Each move it asks: *does this whole path still fit one of the lattice's straight directions* — along a row, or one of the two weave diagonals? "Fit" means every recorded point stays within about one bead-height of the ideal line. Once the stroke spans **more than 3 beads** while fitting, it snaps: the design is rebuilt as *(what existed at stroke start)* + *a clean line of beads* sampled densely along the perfect axis from your start point. If you then curve away, it un-snaps and replays your recorded freehand path instead — nothing is lost. The same logic works for the eraser. Knobs: `SNAP_BEADS` (3) and the `Bh * 0.9` tolerance in `evalSnap`, both in `App.jsx`.
+While you drag a stroke, the code keeps the list of points your pencil passed through (`strokeRef`). Each move it asks: *does this whole path still fit one of the lattice's straight directions* — along a row, or one of the two weave diagonals? "Fit" means every recorded point stays within about one bead-height of the ideal line. Once the stroke spans **more than 3 beads** while fitting, it snaps: the design is rebuilt as *(what existed at stroke start)* + *a clean line of beads* sampled densely along the perfect axis from your start point. If you then curve away, it un-snaps and replays your recorded freehand path instead — nothing is lost. The same logic works for the eraser. Two performance guards matter on iPad: the recorded path only keeps points more than 1px apart, and the snapped line is only rebuilt when it actually gains/loses a bead-length — rebuilding the whole design Map 240×/second crashed mobile Safari. Knobs: `SNAP_BEADS` (3) and the `Bh * 0.9` tolerance in `evalSnap`, both in `App.jsx`.
 
 ### Undo / redo — a history of Maps
 
