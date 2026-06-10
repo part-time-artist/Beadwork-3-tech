@@ -34,3 +34,4 @@ yarn-error.log*
 
 # personal Obsidian vault (synced copy of the root explainer)
 Beadwork/
+scripts/*.png

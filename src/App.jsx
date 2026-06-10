@@ -635,6 +635,102 @@ export default function Home() {
     }
   }
 
+  // ---- straight-line snapping --------------------------------------------
+  // While drawing/erasing, if the stroke stays near one of the lattice's
+  // straight directions (horizontal, or the two weave diagonals) for more
+  // than SNAP_BEADS beads, the painted beads snap to a perfect continuous
+  // line from the stroke start. Curve away and the stroke falls back to the
+  // recorded freehand path.
+  const SNAP_BEADS = 3
+  const strokeRef = useRef(null) // { start, pts, locked, snapped } per stroke
+
+  const snapAxes = () => {
+    // unit vectors of the lattice's straight lines + their bead pitch
+    const dl = Math.hypot(geo.Px / 2, geo.Py)
+    return [
+      { ux: 1, uy: 0, pitch: geo.Px }, // along a row
+      { ux: geo.Px / 2 / dl, uy: geo.Py / dl, pitch: dl }, // diagonal ↘
+      { ux: -(geo.Px / 2) / dl, uy: geo.Py / dl, pitch: dl }, // diagonal ↙
+    ]
+  }
+
+  // Does the whole stroke so far fit a lattice axis? Returns the best axis
+  // (longest projection) or null. Every recorded point must stay within one
+  // bead-height of the ideal line through the stroke start.
+  const evalSnap = (s, p) => {
+    const dx = p.x - s.start.x
+    const dy = p.y - s.start.y
+    const tol = Bh * 0.9
+    let best = null
+    for (const a of snapAxes()) {
+      const proj = dx * a.ux + dy * a.uy
+      if (Math.abs(proj) < SNAP_BEADS * a.pitch) continue
+      const fits = s.pts.every(
+        (q) => Math.abs((q.x - s.start.x) * -a.uy + (q.y - s.start.y) * a.ux) <= tol
+      )
+      if (!fits) continue
+      if (!best || Math.abs(proj) > best.len) {
+        best = {
+          ux: a.ux * Math.sign(proj),
+          uy: a.uy * Math.sign(proj),
+          len: Math.abs(proj),
+          pitch: a.pitch,
+        }
+      }
+    }
+    return best
+  }
+
+  // Sample points along the ideal line; dense enough that beadAt catches
+  // every bead the line passes through (missing apex nodes stay skipped).
+  const lineSamples = (start, snap) => {
+    const out = []
+    const step = snap.pitch / 4
+    for (let t = 0; t <= snap.len; t += step) {
+      out.push({ x: start.x + snap.ux * t, y: start.y + snap.uy * t })
+    }
+    out.push({ x: start.x + snap.ux * snap.len, y: start.y + snap.uy * snap.len })
+    return out
+  }
+
+  // Rebuild the design as (stroke-start state) + brush applied at each point.
+  // Used to repaint the whole stroke as a clean line, or replay it freehand.
+  const paintAlong = (base, points) => {
+    const next = new Map(base)
+    for (const q of points) {
+      for (const { col, row } of brushCells(q.x, q.y)) {
+        const k = key(col, row)
+        if (tool === 'erase') next.delete(k)
+        else next.set(k, color)
+      }
+    }
+    return next
+  }
+
+  const handleStrokePoint = (p) => {
+    const s = strokeRef.current
+    if (s && !s.locked) {
+      s.pts.push(p)
+      const snap = evalSnap(s, p)
+      if (snap) {
+        s.snapped = true
+        setBeads(() => paintAlong(strokeBase.current, lineSamples(s.start, snap)))
+        return
+      }
+      if (s.snapped) {
+        // was a snapped line, now curving: give back the freehand path
+        s.snapped = false
+        s.locked = true
+        setBeads(() => paintAlong(strokeBase.current, s.pts))
+        return
+      }
+      // clearly not straight by now → stop evaluating for this stroke
+      const len = Math.hypot(p.x - s.start.x, p.y - s.start.y)
+      if (len >= SNAP_BEADS * geo.Px * 1.5) s.locked = true
+    }
+    paintBrush(p.x, p.y, tool)
+  }
+
   const onPointerDown = (e) => {
     e.preventDefault()
     canvasRef.current.setPointerCapture?.(e.pointerId)
@@ -662,6 +758,7 @@ export default function Home() {
     }
     dragging.current = true
     strokeBase.current = beadsRef.current // history: snapshot at stroke start
+    strokeRef.current = { start: p, pts: [], locked: false, snapped: false }
     if (tool === 'draw') pushRecent(color)
     paintBrush(p.x, p.y, tool)
   }
@@ -708,8 +805,7 @@ export default function Home() {
       return
     }
     if (dragging.current) {
-      const p = docFromEvent(e)
-      paintBrush(p.x, p.y, tool)
+      handleStrokePoint(docFromEvent(e))
     }
   }
 
@@ -724,6 +820,7 @@ export default function Home() {
       pushHistory(strokeBase.current)
     }
     strokeBase.current = null
+    strokeRef.current = null
     dragging.current = false
     panning.current = null
   }
