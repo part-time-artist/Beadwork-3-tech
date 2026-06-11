@@ -207,10 +207,14 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
   the boot restore share them).
 - Background *images* are not embedded in saves/files (blob URLs die with the
   session — pre-existing behaviour); the design loads with its solid colour.
-- Default palette replaced (user: old 15-swatch muted set rejected): **5
-  colours modelled on Kutchi moti bharat** — bone `#F4EEDF`, vermilion
-  `#B5342B`, marigold `#E0A32E`, peacock green `#1F6E50`, indigo `#2C4E80`.
-  Bead colours may be rich; only UI chrome must stay muted (spec §7.5).
+- Default palette replaced (user: old 15-swatch muted set rejected): **the
+  user's own 5 colours** — pink `#F3CEDE`, chartreuse `#D8DA5F`, sky blue
+  `#8BBEDD`, bone `#F4EEDF`, violet `#4A3772`. (User wrote "8BBED", 5 hex
+  digits; interpreted as `#8BBEDD` — correct here if wrong.) Bead colours may
+  be rich; only UI chrome must stay muted (spec §7.5).
+- Fresh-start defaults per user (2026-06-11): **canvas 10×7 cm, 1.5 mm bead,
+  15% packing** (spacing slider at 0.75). A restored save still wins over
+  these — a design carries its own canvas/palette/spacing.
 - Visual check: `scripts/designscheck.mjs` (save/load/export/import/reload).
 
 ## iPad / Apple Pencil pass (locked 2026-06-10)

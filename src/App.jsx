@@ -32,10 +32,10 @@ const STORAGE_KEY = 'beadwork3_palettes_v1'
 const DESIGN_KEY = 'beadwork3_design_v1'
 const DESIGNS_KEY = 'beadwork3_designs_v1' // named design slots
 
-// Default preset: 5 colours modelled on traditional Kutchi moti bharat —
-// bone-white ground, vermilion red, marigold, peacock green, deep indigo.
-// (Bead colours may be rich; only the UI chrome must stay muted, spec §7.5.)
-const DEFAULT_PALETTE = ['#F4EEDF', '#B5342B', '#E0A32E', '#1F6E50', '#2C4E80']
+// Default preset: the user's own 5 colours (2026-06-11) — soft pink,
+// chartreuse, sky blue, bone, deep violet. (Bead colours may be rich; only
+// the UI chrome must stay muted, spec §7.5.)
+const DEFAULT_PALETTE = ['#F3CEDE', '#D8DA5F', '#8BBEDD', '#F4EEDF', '#4A3772']
 
 const key = (c, r) => `${c},${r}`
 
@@ -60,8 +60,8 @@ const PACKED_DRAW = 1.2
 export default function Home() {
   // ---- physical model ----
   // Two fixed bead sizes, both 4:5 ratio (width:height). Stated size = bead width.
-  const [beadMM, setBeadMM] = useState({ w: 3, h: 3.75 }) // 3 mm default
-  const [canvasCm, setCanvasCm] = useState({ w: 6, h: 6 }) // physical canvas (cm)
+  const [beadMM, setBeadMM] = useState({ w: 1.5, h: 1.875 }) // 1.5 mm default
+  const [canvasCm, setCanvasCm] = useState({ w: 10, h: 7 }) // physical canvas (cm)
 
   // derived bead/row counts from the physical sizes (same packing as screen)
   const { cols, rows } = useMemo(
