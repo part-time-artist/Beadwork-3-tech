@@ -12,6 +12,19 @@ export const PX_PER_MM = 11.81 // ~300 DPI raster
 export const A4 = { w: 210, h: 297 } // mm
 export const GUIDE_EVERY = 10 // bolder guide line + edge number every N beads/rows
 
+// Browsers have a hard canvas-size ceiling and FAIL SILENTLY past it — drawing
+// becomes a no-op and the exported PNG comes out blank. iPad Safari has the
+// smallest ceiling (~16.7M pixels total); even a 6×6cm chart at 300 DPI sits
+// right at that edge, and big canvases (up to 300cm) blow past every browser's
+// limit. rasterScale(w, h) returns the factor (≤1) a canvas of that size must
+// be shrunk by to stay safely inside the ceiling — full 300 DPI when it fits,
+// proportionally lower resolution when it doesn't, never blank.
+const MAX_CANVAS_AREA = 15e6 // pixels, safely under iPad Safari's ~16.7M
+const MAX_CANVAS_DIM = 8192 // per-side ceiling, safe on all modern browsers
+export function rasterScale(w, h) {
+  return Math.min(1, MAX_CANVAS_DIM / w, MAX_CANVAS_DIM / h, Math.sqrt(MAX_CANVAS_AREA / (w * h)))
+}
+
 const key = (c, r) => `${c},${r}`
 
 // Muted chart chrome (no bright accents — spec §7.5).
@@ -132,9 +145,13 @@ export function renderFullChart({
   const W = Math.ceil(margin + geo.width)
   const H = Math.ceil(margin + geo.height)
   const canvas = document.createElement('canvas')
-  canvas.width = W
-  canvas.height = H
+  // shrink to fit the browser's canvas ceiling (see rasterScale) — layout maths
+  // stay in full-resolution pixels, ctx.scale maps them onto the smaller canvas
+  const scale = rasterScale(W, H)
+  canvas.width = Math.ceil(W * scale)
+  canvas.height = Math.ceil(H * scale)
   const ctx = canvas.getContext('2d')
+  ctx.scale(scale, scale)
   if (background && background.type === 'solid') {
     ctx.fillStyle = background.color
     ctx.fillRect(0, 0, W, H)
@@ -193,6 +210,10 @@ export function renderLegend(beads, { scale = PX_PER_MM } = {}) {
 // --- PDF pagination -----------------------------------------------------------
 // Slice the full-chart canvas into A4 printable tiles, one per page, with a page
 // label footer for taping, then append a legend page. Needs a jsPDF instance.
+// CAUTION (currently unused — PNG-only export is the locked decision): this
+// assumes fullCanvas is rasterised at exactly PX_PER_MM, but renderFullChart now
+// shrinks big charts to fit the browser canvas ceiling. If PDF export is ever
+// revived, account for that scale or the printed bead size will be off.
 export function buildPDF(JsPDF, { fullCanvas, beads, margin = 8, label = 'Beadwork chart' }) {
   const doc = new JsPDF({ unit: 'mm', format: 'a4' })
   const printW = A4.w - margin * 2

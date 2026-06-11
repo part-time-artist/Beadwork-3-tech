@@ -178,9 +178,24 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
   bead counts and the printed chart are untouched. Persisted with Save artwork.
   Visual check: `scripts/packedview.mjs` (packed/spaced/zoom screenshots).
 - 2026-06-11: the Packed/Spaced toggle became a **Bead spacing slider** (Bead
-  size card): 0 = spaced (true size) … 1 = fully packed (default); draw scale
-  blends `1 + pack × (PACKED_DRAW − 1)`. Saved as numeric `pack`; old boolean
-  `packed` saves still load (true→1, false→0).
+  size card): 0 = spaced (true size) … 1 = max packed; draw scale blends
+  `1 + pack × (PACKED_DRAW − 1)`. Saved as numeric `pack`; old boolean
+  `packed` saves still load (true→0.75, false→0).
+- Same day, per user: max packing raised to **20%** (`PACKED_DRAW` 1.15→1.2)
+  so beads can press/overlap for a denser fabric look. Beads *kiss* at 0.75 of
+  the slider — that's the default, so the default look is unchanged.
+
+## PNG export: browser canvas ceiling (fixed 2026-06-11)
+- Bug: **Save PNG silently produced a blank sheet.** The chart rasterises at
+  ~300 DPI (8mm/bead), and browsers FAIL SILENTLY past a max canvas size —
+  iPad Safari's ceiling (~16.7M px) is hit by even a 6×6cm chart; 300cm
+  canvases blow past every browser's limit.
+- Fix: `rasterScale(w, h)` in `lib/chart.js` (cap: 15M px area, 8192px/side)
+  shrinks the chart + the composed chart-and-legend PNG to fit — full 300 DPI
+  when it fits, proportionally lower resolution when it doesn't, never blank.
+- `buildPDF` (currently unused) still assumes an unscaled raster — see the
+  CAUTION comment if PDF export is ever revived. Visual check:
+  `scripts/exportcheck.mjs` (60×20cm export, counts coloured pixels).
 
 ## iPad / Apple Pencil pass (locked 2026-06-10)
 1. Primary device is **iPad + Apple Pencil**. Pencil (and desktop mouse) draws;

@@ -7,7 +7,7 @@ import {
   beadPath,
   beadExists,
 } from './lib/geometry'
-import { renderFullChart, renderLegend } from './lib/chart'
+import { renderFullChart, renderLegend, rasterScale } from './lib/chart'
 
 // ---- design tokens: "Nothing" design language (see .claude/skills/nothing-design).
 // Monochrome black/white/grey + one red accent used sparingly. Dotted-grid chrome,
@@ -50,11 +50,12 @@ const BEAD_SIZES = [
 const HISTORY_MAX = 50 // undo steps (one stroke / fill / selection op = one step)
 
 // Fully "packed" view: filled beads are DRAWN this much larger than their true
-// size, so neighbouring beads kiss the way real woven beads do and a motif reads
-// as continuous fabric instead of scattered dots. The spacing slider blends from
-// true size (0) up to this (1). Pure rendering — bead centres, hit-testing,
+// size, so neighbouring beads press together the way real woven beads do and a
+// motif reads as continuous fabric instead of scattered dots. The spacing slider
+// blends from true size (0) up to this (1); beads just kiss at ~1.15, i.e. 0.75
+// on the slider (the default). Pure rendering — bead centres, hit-testing,
 // counts and the printed chart are untouched.
-const PACKED_DRAW = 1.15
+const PACKED_DRAW = 1.2
 
 export default function Home() {
   // ---- physical model ----
@@ -97,7 +98,7 @@ export default function Home() {
   const [tool, setTool] = useState('draw') // draw | erase | select
   const [color, setColor] = useState('#7A2E2E')
   const [orient, setOrient] = useState('woven') // uniform | woven (tilted 3-bead)
-  const [pack, setPack] = useState(1) // 0 = spaced (true size) … 1 = packed (touching)
+  const [pack, setPack] = useState(0.75) // 0 = spaced (true size) … 1 = max packed; 0.75 ≈ touching
   const [brush, setBrush] = useState(1) // brush radius in beads
   const [recentColors, setRecentColors] = useState([]) // up to 5 recently used
   const [selection, setSelection] = useState(() => new Set()) // selected bead keys
@@ -1114,12 +1115,19 @@ export default function Home() {
     const legend = renderLegend(beads)
     const gap = 24
     const out = document.createElement('canvas')
-    out.width = Math.max(chart.width, legend.width)
-    out.height = chart.height + gap + legend.height
+    // stacking chart + legend can exceed the browser canvas ceiling even when
+    // the chart alone fits — past it drawing silently no-ops and the PNG saves
+    // blank. Shrink the composite to stay inside (see rasterScale in chart.js).
+    const outW = Math.max(chart.width, legend.width)
+    const outH = chart.height + gap + legend.height
+    const s = rasterScale(outW, outH)
+    out.width = Math.ceil(outW * s)
+    out.height = Math.ceil(outH * s)
     const ctx = out.getContext('2d')
+    ctx.scale(s, s)
     if (exportBg !== 'transparent') {
       ctx.fillStyle = '#FFFFFF'
-      ctx.fillRect(0, 0, out.width, out.height)
+      ctx.fillRect(0, 0, outW, outH)
     }
     ctx.drawImage(chart, 0, 0)
     ctx.drawImage(legend, 0, chart.height + gap)
@@ -1164,8 +1172,9 @@ export default function Home() {
       if (d.bgT) setBgT(d.bgT)
       if (typeof d.bgShown === 'boolean') setBgShown(d.bgShown)
       if (typeof d.pack === 'number') setPack(clampNum(d.pack, 0, 1))
-      // older saves stored the Packed/Spaced toggle as a boolean
-      else if (typeof d.packed === 'boolean') setPack(d.packed ? 1 : 0)
+      // older saves stored the Packed/Spaced toggle as a boolean; packed meant
+      // the 1.15× touching look, which is 0.75 on today's wider slider
+      else if (typeof d.packed === 'boolean') setPack(d.packed ? 0.75 : 0)
       if (Array.isArray(d.beads)) applyBeads(new Map(d.beads))
     } catch (e) {}
   }, [])
