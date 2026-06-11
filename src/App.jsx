@@ -96,7 +96,7 @@ export default function Home() {
   // ---- design data ----
   const [beads, setBeads] = useState(() => new Map())
   const [tool, setTool] = useState('draw') // draw | erase | select
-  const [color, setColor] = useState('#7A2E2E')
+  const [color, setColor] = useState('#F3CEDE') // starts on the palette's pink
   const [orient, setOrient] = useState('woven') // uniform | woven (tilted 3-bead)
   const [pack, setPack] = useState(0.75) // 0 = spaced (true size) … 1 = max packed; 0.75 ≈ touching
   const [brush, setBrush] = useState(1) // brush radius in beads
@@ -390,6 +390,74 @@ export default function Home() {
     clearSelection()
   }
 
+  // ---- duplicate & place ----------------------------------------------------
+  // Duplicate copies the selected coloured beads into a ghost "stamp" that
+  // follows pen/mouse drags on the canvas; Place commits it as one undo step.
+  // placing = { motif: [{dc,dr,fill}], baseC, baseR, c, r } — (c,r) is the
+  // current origin cell, (baseC,baseR) the original one (needed for parity).
+  const [placing, setPlacing] = useState(null)
+  const placeDrag = useRef(null) // grab offset between pointer and ghost origin
+
+  // The weave lattice is not uniform (apex rows are half-density and tilts
+  // checkerboard), so a copy can only land on origins where every motif bead
+  // still exists: row shift even, and column shift parity matching half the
+  // row shift — same parity rule the pattern maker keeps (its comment above).
+  const snapPlace = (x, y, pl) => {
+    let r = Math.round((y - geo.padY) / geo.Py)
+    if ((((r - pl.baseR) % 2) + 2) % 2 === 1) r += (y - geo.padY) / geo.Py > r ? 1 : -1
+    const off = (r % 2) * geo.rowOffset
+    let c = Math.round((x - geo.padX - off) / geo.Px)
+    const dHalf = ((((r - pl.baseR) / 2) % 2) + 2) % 2
+    if (((c - pl.baseC + dHalf) % 2 + 2) % 2 === 1) c += (x - geo.padX - off) / geo.Px > c ? 1 : -1
+    return { c, r }
+  }
+
+  const duplicateSelection = () => {
+    if (!selection.size) return
+    let minC = Infinity
+    let minR = Infinity
+    const cells = []
+    for (const k of selection) {
+      const fill = beadsRef.current.get(k)
+      if (!fill) continue
+      const [c, r] = k.split(',').map(Number)
+      cells.push({ c, r, fill })
+      if (c < minC) minC = c
+      if (r < minR) minR = r
+    }
+    if (!cells.length) return
+    // even-snapped origin, like the pattern maker, so dc/dr keep cell parity
+    minC -= minC % 2
+    minR -= minR % 2
+    const motif = cells.map(({ c, r, fill }) => ({ dc: c - minC, dr: r - minR, fill }))
+    // the ghost starts just below-right of the original (+1 col +2 rows is a
+    // parity-valid offset) so the user can see it's a separate copy
+    setPlacing({ motif, baseC: minC, baseR: minR, c: minC + 1, r: minR + 2 })
+    clearSelection() // one highlight at a time: the ghost is the focus now
+  }
+
+  const placeDuplicate = () => {
+    if (!placing) return
+    const sel = new Set()
+    commit((prev) => {
+      let next = null
+      for (const { dc, dr, fill } of placing.motif) {
+        const c = placing.c + dc
+        const r = placing.r + dr
+        if (c < 0 || c >= cols || r < 0 || r >= rows || !beadExists(c, r)) continue
+        const k = key(c, r)
+        sel.add(k)
+        if ((next || prev).get(k) !== fill) {
+          next = next || new Map(prev)
+          next.set(k, fill)
+        }
+      }
+      return next || prev
+    })
+    setSelection(sel) // the placed copy becomes the selection — Duplicate again to chain
+    setPlacing(null)
+  }
+
   // ---- pattern maker -------------------------------------------------------
   // Repeats the selected motif across the WHOLE canvas in a classic textile
   // layout: grid (straight repeat), brick (every other row of repeats shifts
@@ -624,8 +692,23 @@ export default function Home() {
         ctx.strokeRect(mx, my, mw, mh)
         ctx.setLineDash([])
       }
+
+      // ghost of the duplicated motif awaiting placement (drag moves it)
+      if (placing) {
+        ctx.globalAlpha = 0.55
+        for (const { dc, dr, fill } of placing.motif) {
+          const c = placing.c + dc
+          const r = placing.r + dr
+          if (c < 0 || c >= cols || r < 0 || r >= rows || !beadExists(c, r)) continue
+          const { cx, cy } = geo.centerFor(c, r)
+          beadPath(ctx, cx, cy, dw, dh, tiltFor(c, r))
+          ctx.fillStyle = fill
+          ctx.fill()
+        }
+        ctx.globalAlpha = 1
+      }
     },
-    [viewport, view, geo, beads, bg, bgT, bgShown, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack]
+    [viewport, view, geo, beads, bg, bgT, bgShown, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing]
   )
   drawRef.current = drawScene // the rAF repaint path always uses the latest
 
@@ -881,6 +964,12 @@ export default function Home() {
       return
     }
     const p = docFromEvent(e)
+    if (placing) {
+      // drag moves the ghost copy; keep the grab offset so it doesn't jump
+      const o = geo.centerFor(placing.c, placing.r)
+      placeDrag.current = { dx: p.x - o.cx, dy: p.y - o.cy }
+      return
+    }
     if (tool === 'select') {
       marqueeRef.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }
       setMarquee(marqueeRef.current)
@@ -950,6 +1039,12 @@ export default function Home() {
       }
       return
     }
+    if (placeDrag.current && placing) {
+      const p = docFromEvent(e)
+      const t = snapPlace(p.x - placeDrag.current.dx, p.y - placeDrag.current.dy, placing)
+      if (t.c !== placing.c || t.r !== placing.r) setPlacing({ ...placing, ...t })
+      return
+    }
     if (marqueeRef.current) {
       const p = docFromEvent(e)
       marqueeRef.current = { ...marqueeRef.current, x1: p.x, y1: p.y }
@@ -976,6 +1071,7 @@ export default function Home() {
     strokeRef.current = null
     dragging.current = false
     panning.current = null
+    placeDrag.current = null
   }
 
   const liftTouch = (e, { allowTap }) => {
@@ -1275,13 +1371,29 @@ export default function Home() {
           </div>
         )}
 
-        {(tool === 'select' || selection.size > 0) && (
+        {(tool === 'select' || selection.size > 0 || placing) && (
           <div className="card selCard">
             <div className="cardTitle">Selection · {selection.size}</div>
             <div className="pillRow">
               <button className="ghost" onClick={recolorSelection} disabled={!selection.size}>Recolour</button>
               <button className="ghost" onClick={deleteSelection} disabled={!selection.size}>Delete</button>
             </div>
+            {!placing && (
+              <button className="ghost" onClick={duplicateSelection} disabled={!selection.size}>Duplicate &amp; place</button>
+            )}
+            {placing && (
+              <>
+                <div className="cardTitle small">Placing copy</div>
+                <div className="pillRow">
+                  <button className="ghost half" onClick={placeDuplicate}>Place</button>
+                  <button className="ghost half" onClick={() => setPlacing(null)}>Cancel</button>
+                </div>
+                <div className="hint tip">
+                  Drag the faded copy on the canvas, then tap Place. The placed
+                  copy stays selected — Duplicate again to keep stamping.
+                </div>
+              </>
+            )}
             {selection.size > 0 && <button className="ghost" onClick={clearSelection}>Clear selection</button>}
             <div className="cardTitle small">Pattern maker</div>
             <div className="pillRow">

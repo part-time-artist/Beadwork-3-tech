@@ -197,6 +197,18 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
   CAUTION comment if PDF export is ever revived. Visual check:
   `scripts/exportcheck.mjs` (60×20cm export, counts coloured pixels).
 
+## Duplicate & place (2026-06-11)
+- Selection card gains **Duplicate & place**: copies the selected coloured
+  beads into a 55%-alpha ghost; pen/mouse drag moves it (relative grab — no
+  jump), **Place** commits as one undo step, **Cancel** discards. The placed
+  copy becomes the new selection so duplicates chain.
+- Ghost positions snap to **parity-valid origins** (row shift even, column
+  parity = half the row shift) so every copied bead lands on an existing
+  lattice node — same rule the pattern maker keeps. Fingers still pan
+  (Procreate rule); only pen/mouse move the ghost.
+- Default drawing colour is now the palette pink `#F3CEDE` (was dark maroon).
+- Visual check: `scripts/duplicatecheck.mjs`.
+
 ## Named designs + design files (2026-06-11)
 - "My designs" card (right panel): **multiple named design slots** in this
   browser (`beadwork3_designs_v1`), name pill + Save (same name overwrites),

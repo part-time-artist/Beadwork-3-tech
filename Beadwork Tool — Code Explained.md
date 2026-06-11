@@ -186,6 +186,10 @@ Because every edit *replaces* the beads Map with a new one (never mutates the ol
 
 The subtlety is **granularity**: one drag-stroke paints dozens of beads, but should undo as *one* step. So a stroke snapshots the Map once at pointer-down and commits that snapshot only if the stroke actually changed something. One-shot edits (flood fill, recolour/delete selection, applying a pattern, clear canvas) go through a small `commit()` helper that snapshots only when the edit really changed the Map. History is capped at 50 steps; any new edit clears the redo pile (you can't redo into a future you've overwritten). Desktop: `Ctrl/⌘+Z`, `Ctrl/⌘+Shift+Z`, or the ↶ ↷ buttons by the zoom control.
 
+### Duplicate & place — stamping a motif
+
+Select coloured beads, tap **Duplicate & place**, and a half-transparent "ghost" copy appears. Dragging with the pen or mouse moves the ghost; **Place** commits it (one undo step) and the placed copy stays selected, so you can immediately duplicate again to stamp a chain. The interesting bit is *where* the ghost is allowed to sit: the weave's lattice isn't uniform (apex rows hold only every other bead, and the lean of base beads alternates), so the code snaps the ghost to positions where every copied bead still lands on a real lattice node — `snapPlace` in `App.jsx`. Without that snap, parts of the copy would silently vanish into the gaps of the weave.
+
 ### Saving — where your work lives
 
 | What | Where | When |
