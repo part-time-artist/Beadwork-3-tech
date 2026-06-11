@@ -186,13 +186,17 @@ Because every edit *replaces* the beads Map with a new one (never mutates the ol
 
 The subtlety is **granularity**: one drag-stroke paints dozens of beads, but should undo as *one* step. So a stroke snapshots the Map once at pointer-down and commits that snapshot only if the stroke actually changed something. One-shot edits (flood fill, recolour/delete selection, applying a pattern, clear canvas) go through a small `commit()` helper that snapshots only when the edit really changed the Map. History is capped at 50 steps; any new edit clears the redo pile (you can't redo into a future you've overwritten). Desktop: `Ctrl/⌘+Z`, `Ctrl/⌘+Shift+Z`, or the ↶ ↷ buttons by the zoom control.
 
-### Saving — three localStorage homes
+### Saving — where your work lives
 
 | What | Where | When |
 |---|---|---|
-| Your artwork | `beadwork3_design_v1` | "Save artwork" button; auto-restores on load |
+| Your current artwork | `beadwork3_design_v1` | "Save artwork" button; auto-restores on load |
+| Named designs | `beadwork3_designs_v1` | "My designs" card — Save stores a slot under the name, click a slot to load, × deletes |
 | Saved palettes | `beadwork3_palettes_v1` | "Save current palette" |
+| A design file | a downloaded `<name>.beadwork.json` file | "Export file" / "Import file" in My designs — the way to move a design between devices |
 | PNG chart | a downloaded file | "Save PNG" (the red primary button) — calls `renderFullChart` + `renderLegend`, stacks them on one canvas, triggers a download |
+
+All four design paths read and write the **same design object**, built by `designData()` and applied by `applyDesign()` in `App.jsx` — one format, four doors. The design file is plain JSON (structured text you could open in any editor), so it survives email, WhatsApp, AirDrop, or a USB stick on the way to another device. One limitation: a background *reference image* isn't carried inside saves or files — the design arrives with its solid background colour instead.
 
 The right panel's cards scroll (`.panelScroll`), while Save PNG + Save artwork sit in a `.saveCluster` **pinned at the bottom** — a giant palette can no longer push the save buttons off-screen. The Draw/Erase/Select switch lives in a **floating strip on the canvas's right edge** (`.toolStrip`) with 56 px buttons, sized and placed for a right-handed iPad user's pencil hand.
 

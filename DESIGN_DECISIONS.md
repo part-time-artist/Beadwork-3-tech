@@ -197,6 +197,22 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
   CAUTION comment if PDF export is ever revived. Visual check:
   `scripts/exportcheck.mjs` (60×20cm export, counts coloured pixels).
 
+## Named designs + design files (2026-06-11)
+- "My designs" card (right panel): **multiple named design slots** in this
+  browser (`beadwork3_designs_v1`), name pill + Save (same name overwrites),
+  click a slot to load (undoable), × deletes (with confirm).
+- **Export file / Import file** moves a design between devices as
+  `<name>.beadwork.json` — the same design object every save path uses
+  (`designData()` / `applyDesign()` in App.jsx; quick-save "Save artwork" and
+  the boot restore share them).
+- Background *images* are not embedded in saves/files (blob URLs die with the
+  session — pre-existing behaviour); the design loads with its solid colour.
+- Default palette replaced (user: old 15-swatch muted set rejected): **5
+  colours modelled on Kutchi moti bharat** — bone `#F4EEDF`, vermilion
+  `#B5342B`, marigold `#E0A32E`, peacock green `#1F6E50`, indigo `#2C4E80`.
+  Bead colours may be rich; only UI chrome must stay muted (spec §7.5).
+- Visual check: `scripts/designscheck.mjs` (save/load/export/import/reload).
+
 ## iPad / Apple Pencil pass (locked 2026-06-10)
 1. Primary device is **iPad + Apple Pencil**. Pencil (and desktop mouse) draws;
    **single-finger drag pans only** (Procreate-style — no stray marks).

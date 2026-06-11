@@ -30,12 +30,12 @@ const T = {
 
 const STORAGE_KEY = 'beadwork3_palettes_v1'
 const DESIGN_KEY = 'beadwork3_design_v1'
+const DESIGNS_KEY = 'beadwork3_designs_v1' // named design slots
 
-const DEFAULT_PALETTE = [
-  '#7A2E2E', '#A8443A', '#C97B5A', '#E3C9A6', '#F2ECE0',
-  '#2E2B26', '#5B5346', '#8A8478', '#3C5148', '#6E8B7A',
-  '#2B3A55', '#4F6D8C', '#9DB4C0', '#D8B4A0', '#FFFFFF',
-]
+// Default preset: 5 colours modelled on traditional Kutchi moti bharat —
+// bone-white ground, vermilion red, marigold, peacock green, deep indigo.
+// (Bead colours may be rich; only the UI chrome must stay muted, spec §7.5.)
+const DEFAULT_PALETTE = ['#F4EEDF', '#B5342B', '#E0A32E', '#1F6E50', '#2C4E80']
 
 const key = (c, r) => `${c},${r}`
 
@@ -1142,40 +1142,110 @@ export default function Home() {
 
   // ---- save artwork: persist in the tool so it reopens for editing next time ----
   const [savedAt, setSavedAt] = useState(null)
+  const [designName, setDesignName] = useState('')
+  const [savedDesigns, setSavedDesigns] = useState([]) // [{ name, savedAt, data }]
+
+  // one design = one plain object: this is what every save path (quick-save,
+  // named slot, exported file) writes and what applyDesign reads back
+  const designData = () => ({
+    version: 1, name: designName, canvasCm, beadMM, palette, bg, bgT, bgShown, pack,
+    beads: [...beads.entries()],
+  })
+
+  // Apply a design object from any source (browser storage, a named slot, an
+  // imported file). undoable: loading over current work goes on the undo stack;
+  // the boot-time restore doesn't (there is nothing to go back to).
+  const applyDesign = (d, { undoable = false } = {}) => {
+    if (!d || typeof d !== 'object' || !Array.isArray(d.beads)) return false
+    if (d.canvasCm) setCanvasCm(d.canvasCm)
+    // snap to the nearest offered size (older saves may hold removed sizes)
+    if (d.beadMM) {
+      const s = BEAD_SIZES.reduce((a, b) =>
+        Math.abs(b.w - d.beadMM.w) < Math.abs(a.w - d.beadMM.w) ? b : a
+      )
+      setBeadMM({ w: s.w, h: s.h })
+    }
+    if (Array.isArray(d.palette)) setPalette(d.palette)
+    // older saves may hold the removed on-screen transparent background
+    if (d.bg) setBg(d.bg.type === 'transparent' ? { ...d.bg, type: 'solid' } : d.bg)
+    if (d.bgT) setBgT(d.bgT)
+    if (typeof d.bgShown === 'boolean') setBgShown(d.bgShown)
+    if (typeof d.pack === 'number') setPack(clampNum(d.pack, 0, 1))
+    // older saves stored the Packed/Spaced toggle as a boolean; packed meant
+    // the 1.15× touching look, which is 0.75 on today's wider slider
+    else if (typeof d.packed === 'boolean') setPack(d.packed ? 0.75 : 0)
+    if (typeof d.name === 'string') setDesignName(d.name)
+    if (undoable) pushHistory(beadsRef.current)
+    applyBeads(new Map(d.beads))
+    return true
+  }
+
   const saveArtwork = () => {
-    const data = { version: 1, canvasCm, beadMM, palette, bg, bgT, bgShown, pack, beads: [...beads.entries()] }
     try {
-      localStorage.setItem(DESIGN_KEY, JSON.stringify(data))
+      localStorage.setItem(DESIGN_KEY, JSON.stringify(designData()))
       setSavedAt(Date.now())
     } catch (e) {
       window.alert('Could not save — the design may be too large for browser storage.')
     }
   }
 
-  // restore the last saved artwork on load
+  // ---- named design slots (multiple designs in this browser) ----
+  const persistDesigns = (list) => {
+    setSavedDesigns(list)
+    try {
+      localStorage.setItem(DESIGNS_KEY, JSON.stringify(list))
+    } catch (e) {
+      window.alert('Could not save — browser storage is full. Delete a design or use Export file.')
+    }
+  }
+
+  const saveDesignAs = () => {
+    const name = designName.trim() || 'untitled'
+    setDesignName(name)
+    const slot = { name, savedAt: Date.now(), data: { ...designData(), name } }
+    // same name = overwrite that slot
+    persistDesigns([...savedDesigns.filter((s) => s.name !== name), slot])
+  }
+
+  const loadDesign = (slot) => {
+    if (applyDesign(slot.data, { undoable: true })) setDesignName(slot.name)
+  }
+
+  // ---- design file (move a design between devices) ----
+  const exportDesignFile = () => {
+    const name = designName.trim() || 'beadwork-design'
+    const blob = new Blob([JSON.stringify(designData())], { type: 'application/json' })
+    const link = document.createElement('a')
+    link.download = `${name}.beadwork.json`
+    link.href = URL.createObjectURL(blob)
+    link.click()
+    URL.revokeObjectURL(link.href)
+  }
+
+  const onDesignFile = async (file) => {
+    if (!file) return
+    try {
+      const d = JSON.parse(await file.text())
+      if (!applyDesign(d, { undoable: true })) throw new Error('not a design')
+      // files saved before names existed: fall back to the file's own name
+      if (typeof d.name !== 'string' || !d.name) {
+        setDesignName(file.name.replace(/(\.beadwork)?\.json$/i, ''))
+      }
+    } catch (e) {
+      window.alert('Could not read that file — it does not look like a beadwork design file.')
+    }
+  }
+
+  // restore the last saved artwork + the named-design list on load
   useEffect(() => {
     try {
       const raw = localStorage.getItem(DESIGN_KEY)
-      if (!raw) return
-      const d = JSON.parse(raw)
-      if (d.canvasCm) setCanvasCm(d.canvasCm)
-      // snap to the nearest offered size (older saves may hold the removed 1.5mm)
-      if (d.beadMM) {
-        const s = BEAD_SIZES.reduce((a, b) =>
-          Math.abs(b.w - d.beadMM.w) < Math.abs(a.w - d.beadMM.w) ? b : a
-        )
-        setBeadMM({ w: s.w, h: s.h })
-      }
-      if (Array.isArray(d.palette)) setPalette(d.palette)
-      // older saves may hold the removed on-screen transparent background
-      if (d.bg) setBg(d.bg.type === 'transparent' ? { ...d.bg, type: 'solid' } : d.bg)
-      if (d.bgT) setBgT(d.bgT)
-      if (typeof d.bgShown === 'boolean') setBgShown(d.bgShown)
-      if (typeof d.pack === 'number') setPack(clampNum(d.pack, 0, 1))
-      // older saves stored the Packed/Spaced toggle as a boolean; packed meant
-      // the 1.15× touching look, which is 0.75 on today's wider slider
-      else if (typeof d.packed === 'boolean') setPack(d.packed ? 0.75 : 0)
-      if (Array.isArray(d.beads)) applyBeads(new Map(d.beads))
+      if (raw) applyDesign(JSON.parse(raw))
+    } catch (e) {}
+    try {
+      const raw = localStorage.getItem(DESIGNS_KEY)
+      const list = raw && JSON.parse(raw)
+      if (Array.isArray(list)) setSavedDesigns(list)
     } catch (e) {}
   }, [])
 
@@ -1481,6 +1551,57 @@ export default function Home() {
           )}
         </div>
 
+        {/* My designs — named slots in this browser + a file for moving devices */}
+        <div className="card">
+          <div className="cardTitle">My designs</div>
+          <div className="pillRow">
+            <Pill value={designName} label="name" text onChange={setDesignName} />
+            <button className="ghost" onClick={saveDesignAs}>Save</button>
+          </div>
+          {savedDesigns.length > 0 && (
+            <div className="savedList">
+              {savedDesigns.map((s, i) => (
+                <div className="savedItem" key={i}>
+                  <button
+                    className="savedApply"
+                    onClick={() => loadDesign(s)}
+                    title={`Open “${s.name}” (undo brings the current design back)`}
+                  >
+                    <span className="savedName">{s.name}</span>
+                    <span className="savedMeta">
+                      {s.data.beads.length} beads · {new Date(s.savedAt).toLocaleDateString()}
+                    </span>
+                  </button>
+                  <button
+                    className="x"
+                    title="Delete design"
+                    onClick={() => {
+                      if (window.confirm(`Delete “${s.name}”? This cannot be undone.`))
+                        persistDesigns(savedDesigns.filter((_, k) => k !== i))
+                    }}
+                  >×</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="pillRow">
+            <button className="ghost half" onClick={exportDesignFile}>Export file</button>
+            <label className="ghost half fileBtn">
+              Import file
+              <input
+                type="file"
+                accept=".json,application/json"
+                style={{ display: 'none' }}
+                onChange={(e) => { onDesignFile(e.target.files[0]); e.target.value = '' }}
+              />
+            </label>
+          </div>
+          <div className="hint tip">
+            Saved designs live in this browser. To move one to another device,
+            Export file here and Import file there.
+          </div>
+        </div>
+
         {/* Export — PNG chart for the artisan */}
         <div className="card">
           <div className="cardTitle">Export — chart PNG</div>
@@ -1726,6 +1847,7 @@ export default function Home() {
         .savedApply:hover { background: #242424; }
         .savedName { font-family: ${T.mono}; font-size: 10px; color: ${T.ink};
           text-transform: uppercase; letter-spacing: 0.06em; }
+        .savedMeta { font-family: ${T.mono}; font-size: 9px; color: ${T.inkSoft}; }
         .savedSw { display: flex; flex-wrap: wrap; gap: 3px; }
         .savedSw i { width: 14px; height: 14px; border-radius: 3px; display: block;
           box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
