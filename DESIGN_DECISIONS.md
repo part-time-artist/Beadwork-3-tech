@@ -175,9 +175,12 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
 - Fix: **"Packed" view (default)** draws FILLED beads enlarged by
   `PACKED_DRAW` (1.15) so neighbours kiss like the real weave. Empty cells stay
   true-size (grid stays readable). Pure rendering — bead centres, hit-testing,
-  bead counts and the printed chart are untouched. "Spaced" toggle (Bead size
-  card) restores the exact-size view. Persisted with Save artwork. Visual
-  check: `scripts/packedview.mjs` (packed/spaced/zoom screenshots).
+  bead counts and the printed chart are untouched. Persisted with Save artwork.
+  Visual check: `scripts/packedview.mjs` (packed/spaced/zoom screenshots).
+- 2026-06-11: the Packed/Spaced toggle became a **Bead spacing slider** (Bead
+  size card): 0 = spaced (true size) … 1 = fully packed (default); draw scale
+  blends `1 + pack × (PACKED_DRAW − 1)`. Saved as numeric `pack`; old boolean
+  `packed` saves still load (true→1, false→0).
 
 ## iPad / Apple Pencil pass (locked 2026-06-10)
 1. Primary device is **iPad + Apple Pencil**. Pencil (and desktop mouse) draws;

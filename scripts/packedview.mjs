@@ -1,5 +1,5 @@
-// Visual check for the Packed bead view: draw a chunky motif + flood-filled
-// blob, screenshot Packed vs Spaced so the density can be tuned by eye.
+// Visual check for the bead spacing slider: draw a chunky motif + flood-filled
+// blob, screenshot fully packed vs fully spaced so density can be tuned by eye.
 import { chromium } from 'playwright-core'
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -32,16 +32,19 @@ const stroke = async (pts) => {
 }
 await stroke([[cx - 140, cy - 40], [cx - 80, cy - 100], [cx - 20, cy - 40], [cx + 40, cy - 100], [cx + 100, cy - 40]])
 await stroke([[cx - 140, cy], [cx + 100, cy]])
+// two range sliders exist now: [0] = brush size, [1] = bead spacing
+const brushSlider = page.locator('.slider').nth(0)
+const spacingSlider = page.locator('.slider').nth(1)
 // brush 3 blob
-await page.locator('.slider').fill('3')
+await brushSlider.fill('3')
 await stroke([[cx - 60, cy + 70], [cx + 20, cy + 70]])
-await page.locator('.slider').fill('1')
+await brushSlider.fill('1')
 
 await page.screenshot({ path: 'scripts/view-packed.png' })
-await page.getByRole('button', { name: 'Spaced', exact: true }).click()
+await spacingSlider.fill('0')
 await page.waitForTimeout(300)
 await page.screenshot({ path: 'scripts/view-spaced.png' })
-await page.getByRole('button', { name: 'Packed', exact: true }).click()
+await spacingSlider.fill('1')
 await page.waitForTimeout(300)
 
 // zoomed-in closeup of the packed weave

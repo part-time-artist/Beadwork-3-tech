@@ -49,10 +49,11 @@ const BEAD_SIZES = [
 
 const HISTORY_MAX = 50 // undo steps (one stroke / fill / selection op = one step)
 
-// "Packed" view: filled beads are DRAWN this much larger than their true size,
-// so neighbouring beads kiss the way real woven beads do and a motif reads as
-// continuous fabric instead of scattered dots. Pure rendering — bead centres,
-// hit-testing, counts and the printed chart are untouched.
+// Fully "packed" view: filled beads are DRAWN this much larger than their true
+// size, so neighbouring beads kiss the way real woven beads do and a motif reads
+// as continuous fabric instead of scattered dots. The spacing slider blends from
+// true size (0) up to this (1). Pure rendering — bead centres, hit-testing,
+// counts and the printed chart are untouched.
 const PACKED_DRAW = 1.15
 
 export default function Home() {
@@ -96,7 +97,7 @@ export default function Home() {
   const [tool, setTool] = useState('draw') // draw | erase | select
   const [color, setColor] = useState('#7A2E2E')
   const [orient, setOrient] = useState('woven') // uniform | woven (tilted 3-bead)
-  const [packed, setPacked] = useState(true) // draw filled beads touching (fabric look)
+  const [pack, setPack] = useState(1) // 0 = spaced (true size) … 1 = packed (touching)
   const [brush, setBrush] = useState(1) // brush radius in beads
   const [recentColors, setRecentColors] = useState([]) // up to 5 recently used
   const [selection, setSelection] = useState(() => new Set()) // selected bead keys
@@ -555,10 +556,11 @@ export default function Home() {
       ctx.lineWidth = 1.25 / scale
       ctx.strokeStyle = '#cdcac3'
 
-      // packed view: filled beads draw enlarged so they touch like real beads;
-      // empty cells stay true-size so the grid underneath remains readable
-      const dw = packed ? Bw * PACKED_DRAW : Bw
-      const dh = packed ? Bh * PACKED_DRAW : Bh
+      // spacing slider: filled beads draw enlarged (up to touching) by the pack
+      // amount; empty cells stay true-size so the grid underneath stays readable
+      const drawScale = 1 + pack * (PACKED_DRAW - 1)
+      const dw = Bw * drawScale
+      const dh = Bh * drawScale
 
       // beadsRef (not the `beads` state) so silent stroke repaints are visible;
       // `beads` stays in the deps so committed edits still trigger the effect
@@ -622,7 +624,7 @@ export default function Home() {
         ctx.setLineDash([])
       }
     },
-    [viewport, view, geo, beads, bg, bgT, bgShown, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, packed]
+    [viewport, view, geo, beads, bg, bgT, bgShown, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack]
   )
   drawRef.current = drawScene // the rAF repaint path always uses the latest
 
@@ -1133,7 +1135,7 @@ export default function Home() {
   // ---- save artwork: persist in the tool so it reopens for editing next time ----
   const [savedAt, setSavedAt] = useState(null)
   const saveArtwork = () => {
-    const data = { version: 1, canvasCm, beadMM, palette, bg, bgT, bgShown, packed, beads: [...beads.entries()] }
+    const data = { version: 1, canvasCm, beadMM, palette, bg, bgT, bgShown, pack, beads: [...beads.entries()] }
     try {
       localStorage.setItem(DESIGN_KEY, JSON.stringify(data))
       setSavedAt(Date.now())
@@ -1161,7 +1163,9 @@ export default function Home() {
       if (d.bg) setBg(d.bg.type === 'transparent' ? { ...d.bg, type: 'solid' } : d.bg)
       if (d.bgT) setBgT(d.bgT)
       if (typeof d.bgShown === 'boolean') setBgShown(d.bgShown)
-      if (typeof d.packed === 'boolean') setPacked(d.packed)
+      if (typeof d.pack === 'number') setPack(clampNum(d.pack, 0, 1))
+      // older saves stored the Packed/Spaced toggle as a boolean
+      else if (typeof d.packed === 'boolean') setPack(d.packed ? 1 : 0)
       if (Array.isArray(d.beads)) applyBeads(new Map(d.beads))
     } catch (e) {}
   }, [])
@@ -1244,20 +1248,19 @@ export default function Home() {
             ))}
           </div>
           <div className="hint">4:5 ratio · {cols} × {rows} beads</div>
-          <div className="cardTitle small">Bead view</div>
-          <div className="segmented">
-            {[
-              [true, 'Packed'],
-              [false, 'Spaced'],
-            ].map(([val, label]) => (
-              <button
-                key={label}
-                className={`seg ${packed === val ? 'on' : ''}`}
-                onClick={() => setPacked(val)}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="cardTitle small">Bead spacing</div>
+          <div className="brushRow">
+            <span className="brushLabel">Spaced</span>
+            <input
+              className="slider"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={pack}
+              onChange={(e) => setPack(+e.target.value)}
+            />
+            <span className="brushLabel">Packed</span>
           </div>
           <div className="hint">Packed draws beads touching, like the real weave.</div>
         </div>

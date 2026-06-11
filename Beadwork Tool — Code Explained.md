@@ -139,9 +139,9 @@ The canvas element is only ever the size of your *window*, never the design. Zoo
 > [!tip] Why a camera instead of a giant canvas?
 > Browsers refuse canvases bigger than ~16,000 px. A 300 cm design would blow past that. With a camera, the canvas stays small and we just change which part of the document it shows — this fixed the old "glitches above 60 cm" bug.
 
-### Packed vs Spaced — why beads are drawn bigger than they are
+### The Bead spacing slider — why beads are drawn bigger than they are
 
-In the real weave, beads press against each other — almost no background shows, which is exactly why motifs are so easy to read on real beadwork. If the screen draws every bead at its mathematically true size, the lattice spacing leaves visible ground between beads and a design looks like scattered dots. So the default **Packed** view draws *filled* beads 15% larger (`PACKED_DRAW`) — purely a drawing trick. The bead's real position, its hit area, the bead counts and the printed chart all still use the true geometry. **Spaced** (in the Bead size card) shows true sizes when you want to inspect individual cells.
+In the real weave, beads press against each other — almost no background shows, which is exactly why motifs are so easy to read on real beadwork. If the screen draws every bead at its mathematically true size, the lattice spacing leaves visible ground between beads and a design looks like scattered dots. So the **Bead spacing slider** (in the Bead size card) lets you draw *filled* beads anywhere from true size ("Spaced", slider at 0) up to 15% larger ("Packed", slider at 1, the default) so neighbours touch like real fabric — purely a drawing trick. The code stores the slider as a number `pack` between 0 and 1 and computes the draw size as `1 + pack × (PACKED_DRAW − 1)` — this is called *linear interpolation*: at 0 you get exactly 1× (true size), at 1 you get exactly 1.15×, and halfway you get 1.075×. The bead's real position, its hit area, the bead counts and the printed chart all still use the true geometry.
 
 ### `drawScene` — the painter
 
