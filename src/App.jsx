@@ -1632,7 +1632,7 @@ export default function Home() {
         .panel.right { border-left: 1px solid ${T.line}; }
         /* both panels: cards scroll, the pinned cluster below stays visible */
         .panelScroll {
-          flex: 1 1 auto; min-height: 0; overflow-y: auto;
+          flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
           -webkit-overflow-scrolling: touch;
           display: flex; flex-direction: column; gap: 11px;
         }
@@ -1658,7 +1658,9 @@ export default function Home() {
         .brushLabel { font-family: ${T.mono}; font-size: 10px; text-transform: uppercase;
           letter-spacing: 0.1em; color: ${T.inkSoft}; }
         .brushVal { font-family: ${T.mono}; font-size: 12px; color: ${T.ink}; width: 12px; text-align: right; }
-        .slider { flex: 1; -webkit-appearance: none; appearance: none; height: 3px;
+        /* min-width: 0 — a range input refuses to flex-shrink below its ~129px
+           built-in size otherwise, which made the left panel scroll sideways */
+        .slider { flex: 1; min-width: 0; -webkit-appearance: none; appearance: none; height: 3px;
           background: ${T.line}; border-radius: 3px; outline: none; }
         .slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
           width: 14px; height: 14px; border-radius: 50%; background: ${T.ink}; cursor: pointer; }
