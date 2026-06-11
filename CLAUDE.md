@@ -46,7 +46,7 @@ must be checked against the mockup, never assumed; that was a prior failure).
   `Home`). Holds all state (bead map, tool, color, palettes, background, bead
   size, canvas size, zoom, orientation, guides), renders to an HTML `<canvas>`,
   handles pointer/drag/zoom interaction, and contains all UI + styled-jsx. The
-  `Pill` component and helpers (`clampNum`, `ratioLabel`) live at the bottom.
+  `Pill` / `HoldButton` components and `clampNum` live at the bottom.
 - **`src/lib/geometry.js`** — all grid math, pure and separate. Exports
   `makeGeometry`, `beadCountFromCm`, `beadExists`, `beadAt` (hit-test),
   `nearestBead` (closest bead, no radius cutoff — for drag-fill), `beadPath`
@@ -55,8 +55,10 @@ must be checked against the mockup, never assumed; that was a prior failure).
   lines, edge numbers, colour-key legend) shared by the on-screen guides overlay
   and the PNG export.
 
-**Legacy/unused:** `components/`, `parts/`, `static/` are leftovers from the Etch
-fork and are **not imported**. Don't extend them; don't assume they run.
+**Legacy Etch leftovers were deleted 2026-06-11** (`components/`, `parts/`,
+`static/`, the Tailwind/shadcn pipeline, `yarn.lock`). Everything under `src/`
+is live; `scripts/` holds Playwright visual-check scripts (`node scripts/x.mjs`
+against a running dev server).
 
 ### The grid model (the heart of the tool)
 
@@ -97,8 +99,10 @@ values and rationale.
 
 ### Persistence
 
-Saved color palettes live in `localStorage` under `beadwork3_palettes_v1`. No
-backend. The in-progress design is **not** persisted.
+No backend. Saved color palettes live in `localStorage` under
+`beadwork3_palettes_v1`; "Save artwork" persists the whole design (beads,
+canvas, palette, background) under `beadwork3_design_v1` and auto-restores it
+on load.
 
 ## UI conventions (spec §7.5 — non-negotiable)
 
@@ -106,6 +110,6 @@ The UI must stay **muted/earthy neutral — no bright accent colors** on purpose
 the designer judges *bead* colors on the canvas, so a colorful UI would bias
 their color perception. Active/selected states use tone/weight (darker fill,
 border, shadow), never a saturated hue. Design tokens are the `T` object at the
-top of `pages/index.js`. The look: light, airy, rounded, flat, soft glass panels,
+top of `src/App.jsx`. The look: light, airy, rounded, flat, soft glass panels,
 inline-labeled input pills (`Pill`), one full-width primary button. A prior dark
 cramped UI was rejected — keep it Figma-clean.
