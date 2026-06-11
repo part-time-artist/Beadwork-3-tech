@@ -140,9 +140,19 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
   background; RIGHT = colour/palette + export + save. Canvas in the middle.
 
 ## Editing features (latest)
-- **Select tool** (marquee): drag a box → selects existing beads in it; actions
-  Recolour / Delete / Copy / Paste (paste offset by 2 cells, parity-preserving).
+- **Select tool** (marquee): drag a box → selects **coloured beads only**
+  (2026-06-11; empty cells are never selectable). Actions: Recolour / Delete.
   Selected beads get an accent ring; live marquee drawn dashed.
+- **Pattern maker replaces copy/paste** (2026-06-11; a centred-paste version
+  existed briefly the same day). The selected motif repeats across the WHOLE
+  canvas in a textile layout: **Grid** (straight repeat), **Brick** (alternate
+  repeat-rows shift sideways by half a tile) or **Half-drop** (alternate
+  repeat-columns drop by half a tile), plus a **gap** input (empty beads
+  between repeats). The repeat lattice is anchored on the motif itself; tile
+  pitch and all shifts stay EVEN so apex/base parity and `beadExists` survive
+  (the half-tile shift is floored to even, min 2). One pattern = one undo step.
+  Verified by `scripts/patterntest.mjs` (asserts the exact lattice of all
+  three layouts).
 - **Brush size** slider (1–6): brush>1 paints all beads within a growing radius.
 - **Recent colours** (up to 5), auto-tracked on draw/fill, shown above the palette.
 - **Empty beads** drawn very-slight grey (#eaeaeb), not white.

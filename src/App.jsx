@@ -94,7 +94,6 @@ export default function Home() {
   const [recentColors, setRecentColors] = useState([]) // up to 5 recently used
   const [selection, setSelection] = useState(() => new Set()) // selected bead keys
   const [marquee, setMarquee] = useState(null) // live select rectangle (doc coords)
-  const [clipboard, setClipboard] = useState(null) // copied beads (relative)
 
   const pushRecent = useCallback((c) => {
     setRecentColors((prev) => [c, ...prev.filter((x) => x !== c)].slice(0, 5))
@@ -145,19 +144,6 @@ export default function Home() {
     undoStack.current.push(beadsRef.current)
     applyBeads(redoStack.current.pop())
   }, [applyBeads])
-
-  // desktop keyboard: Ctrl/⌘+Z undo, Ctrl/⌘+Shift+Z redo
-  useEffect(() => {
-    const onKey = (e) => {
-      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return
-      if (e.target !== document.body) return // don't steal from inputs
-      e.preventDefault()
-      if (e.shiftKey) redo()
-      else undo()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [undo, redo])
 
   // Per-cell tilt (radians). Apex (even) rows lie HORIZONTAL (rotated 90°).
   // Tilted (odd) rows: neighbouring beads MIRROR each other (+45/−45 along the
@@ -333,13 +319,15 @@ export default function Home() {
       for (let row = r0; row < r1; row++) {
         for (let col = c0; col < c1; col++) {
           if (!beadExists(col, row)) continue
+          const k = key(col, row)
+          if (!beads.has(k)) continue // only coloured beads are selectable
           const { cx, cy } = geo.centerFor(col, row)
-          if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) sel.add(key(col, row))
+          if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) sel.add(k)
         }
       }
       setSelection(sel)
     },
-    [geo, rows, cols]
+    [geo, rows, cols, beads]
   )
 
   const clearSelection = () => setSelection(new Set())
@@ -364,45 +352,87 @@ export default function Home() {
     clearSelection()
   }
 
-  const copySelection = () => {
+  // ---- pattern maker -------------------------------------------------------
+  // Repeats the selected motif across the WHOLE canvas in a classic textile
+  // layout: grid (straight repeat), brick (every other row of repeats shifts
+  // sideways by half a tile) or half-drop (every other column of repeats drops
+  // by half a tile). The repeat lattice is anchored on the motif itself, so the
+  // original beads are one tile of the pattern. Every offset is kept EVEN so
+  // the weave's apex/base row parity and the tilt checkerboard survive (odd
+  // shifts would put horizontal apex beads on tilted rows, and vice versa).
+  const [patternGap, setPatternGap] = useState(0) // empty beads between repeats
+
+  const makePattern = (mode) => {
     if (!selection.size) return
+    // motif = the selected coloured beads, relative to an even-snapped origin
     let minC = Infinity
     let minR = Infinity
+    let maxC = -Infinity
+    let maxR = -Infinity
     const cells = []
     for (const k of selection) {
-      const fill = beads.get(k)
-      if (!fill) continue // copy only filled beads
+      const fill = beadsRef.current.get(k)
+      if (!fill) continue
       const [c, r] = k.split(',').map(Number)
-      cells.push({ c, r, color: fill })
+      cells.push({ c, r, fill })
       if (c < minC) minC = c
+      if (c > maxC) maxC = c
       if (r < minR) minR = r
+      if (r > maxR) maxR = r
     }
     if (!cells.length) return
-    // even offsets preserve the weave's apex/base parity on paste
     minC -= minC % 2
     minR -= minR % 2
-    setClipboard(cells.map(({ c, r, color }) => ({ dc: c - minC, dr: r - minR, color })))
-  }
-
-  const pasteClipboard = () => {
-    if (!clipboard) return
-    const oc = 2
-    const or = 2 // place shifted by 2 cells (keeps parity) so it's visible
+    const motif = cells.map(({ c, r, fill }) => ({ dc: c - minC, dr: r - minR, fill }))
+    // tile pitch = motif size + gap, rounded UP to even (parity rule above)
+    const evenUp = (n) => n + (n % 2)
+    const px = evenUp(maxC - minC + 1 + patternGap)
+    const py = evenUp(maxR - minR + 1 + patternGap)
+    // the brick / half-drop shift: half a tile, snapped to even — but never 0,
+    // or a small motif would degrade brick / half-drop into a plain grid
+    const half = (n) => {
+      const s = Math.floor(n / 2)
+      return Math.max(2, s - (s % 2))
+    }
     commit((prev) => {
       const next = new Map(prev)
-      const sel = new Set()
-      for (const { dc, dr, color: cc } of clipboard) {
-        const c = dc + oc
-        const r = dr + or
-        if (c < 0 || c >= cols || r < 0 || r >= rows || !beadExists(c, r)) continue
-        const k = key(c, r)
-        next.set(k, cc)
-        sel.add(k)
+      // tile indices covering the grid (one extra column for the brick shift)
+      const i0 = -Math.ceil(minC / px) - 1
+      const i1 = Math.ceil((cols - minC) / px)
+      const j0 = -Math.ceil(minR / py)
+      const j1 = Math.ceil((rows - minR) / py)
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          if (i === 0 && j === 0) continue // the motif itself stays as-is
+          let oc = minC + i * px
+          let or = minR + j * py
+          const oddBand = (((mode === 'brick' ? j : i) % 2) + 2) % 2 === 1
+          if (mode === 'brick' && oddBand) oc += half(px)
+          if (mode === 'halfdrop' && oddBand) or += half(py)
+          for (const { dc, dr, fill } of motif) {
+            const c = oc + dc
+            const r = or + dr
+            if (c < 0 || c >= cols || r < 0 || r >= rows || !beadExists(c, r)) continue
+            next.set(key(c, r), fill)
+          }
+        }
       }
-      setSelection(sel)
       return next
     })
   }
+
+  // desktop keyboard: Ctrl/⌘+Z undo, Ctrl/⌘+Shift+Z redo
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return
+      if (e.target !== document.body) return // don't steal from inputs
+      e.preventDefault()
+      if (e.shiftKey) redo()
+      else undo()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo, redo])
 
   // ---- canvas drawing ----
   const canvasRef = useRef(null)
@@ -1115,12 +1145,23 @@ export default function Home() {
               <button className="ghost" onClick={recolorSelection} disabled={!selection.size}>Recolour</button>
               <button className="ghost" onClick={deleteSelection} disabled={!selection.size}>Delete</button>
             </div>
-            <div className="pillRow">
-              <button className="ghost" onClick={copySelection} disabled={!selection.size}>Copy</button>
-              <button className="ghost" onClick={pasteClipboard} disabled={!clipboard}>Paste</button>
-            </div>
             {selection.size > 0 && <button className="ghost" onClick={clearSelection}>Clear selection</button>}
-            <div className="hint tip">Drag a box over the beads to select them.</div>
+            <div className="cardTitle small">Pattern maker</div>
+            <div className="pillRow">
+              <button className="ghost" onClick={() => makePattern('grid')} disabled={!selection.size}>Grid</button>
+              <button className="ghost" onClick={() => makePattern('brick')} disabled={!selection.size}>Brick</button>
+              <button className="ghost" onClick={() => makePattern('halfdrop')} disabled={!selection.size}>½ drop</button>
+            </div>
+            <Pill
+              value={patternGap}
+              label="gap beads"
+              onChange={(v) => setPatternGap(clampNum(Math.round(v), 0, 60))}
+            />
+            <div className="hint tip">
+              Drag a box over coloured beads to select a motif, then repeat it
+              across the whole canvas. Gap = empty beads between repeats.
+              Undo removes the pattern.
+            </div>
           </div>
         )}
 
@@ -1551,14 +1592,6 @@ export default function Home() {
         .panel button:focus-visible, .panel input:focus-visible,
         .panel label:focus-within { outline: 2px solid ${T.accent}; outline-offset: 1px; }
 
-        .tabs { display: flex; gap: 6px; }
-        .tab {
-          flex: 1; height: 40px; border: none; cursor: pointer;
-          background: #E7E2D8; color: ${T.inkSoft};
-          border-radius: 12px; font-size: 17px; transition: 0.15s;
-        }
-        .tab.on { background: ${T.active}; color: ${T.activeInk}; }
-
         .card {
           background: ${T.panelSolid};
           border-radius: ${T.radius}px;
@@ -1766,12 +1799,4 @@ function HoldButton({ duration = 700, onHold, children }) {
 function clampNum(v, lo, hi) {
   if (isNaN(v)) return lo
   return Math.min(hi, Math.max(lo, v))
-}
-
-function ratioLabel(w, h) {
-  const g = gcd(Math.round(w * 10), Math.round(h * 10))
-  return `${Math.round((w * 10) / g)}:${Math.round((h * 10) / g)}`
-}
-function gcd(a, b) {
-  return b ? gcd(b, a % b) : a
 }

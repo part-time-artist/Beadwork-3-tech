@@ -1,7 +1,7 @@
 # Beadwork Tool — Code Explained
 
 > [!info] What this note is
-> A plain-language map of the code behind **https://part-time-artist.github.io/Beadworks/** — what each file is, what each part does, and *why it exists for the craft*. Read top to bottom once, then use it as a reference. Technical words are explained the first time they appear.
+> A plain-language map of the code behind **https://part-time-artist.github.io/Beadwork-3-tech/** — what each file is, what each part does, and *why it exists for the craft*. Read top to bottom once, then use it as a reference. Technical words are explained the first time they appear.
 
 ---
 
@@ -20,9 +20,13 @@ The app is a single web page. There is no server, no database — everything run
 | `src/App.jsx` | **The whole app**: every button, the canvas, all behaviour |
 | `src/lib/geometry.js` | **All the bead-grid math** — pure, no UI |
 | `src/lib/chart.js` | Draws the **printable chart** the artisan reads at the loom |
-| `src/index.css` | A few base styles |
 
-Folders like `components/`, `parts/`, `static/` are leftovers from the open-source project this was forked from. **They are dead code** — nothing imports them.
+That's the whole app — four files. The leftover folders from the open-source
+project this was forked from (`components/`, `parts/`, `static/`, plus an
+unused Tailwind CSS setup) were **deleted in the 2026-06-11 cleanup**; nothing
+imported them, they only made the project look bigger than it is. `scripts/`
+holds small Playwright scripts that open the app in a headless browser and
+screenshot it — our stand-in for a test suite.
 
 > [!tip] Why split geometry/chart out of App.jsx?
 > `geometry.js` is *pure math* — give it numbers, it gives numbers back. It never touches the screen. That means the same math drives both the on-screen editor and the printed chart, so the two can never disagree. This is a classic programming idea: **separate "what is true" (math/data) from "how it looks" (UI).**
@@ -143,7 +147,9 @@ Runs every time anything changes, in order: background (colour/image/checkerboar
 
 - **`paintBead` / `paintBrush`** — set or delete entries in the beads Map. Brush sizes 2–6 paint all beads within a growing radius. If nothing actually changed, it returns the old Map untouched so React skips a pointless redraw.
 - **`floodFill`** — the paint-bucket, triggered by *dragging a palette colour onto the canvas*. The drag itself is built from plain pointer events (a ghost swatch follows your finger/pencil/mouse; a quick tap just picks the colour) because **iPad Safari doesn't support HTML5 drag-and-drop for touch at all** — that's why the old version silently did nothing on iPad. The fill starts at the dropped bead and spreads to same-coloured neighbours, stopping at different colours. Crucially it spreads via the **staggered neighbours** — left, right, and the four *diagonal nestled* beads — because that's who actually touches whom in this weave. A square-grid flood fill would be wrong here.
-- **Selection (marquee)** — drag a box; any bead whose *centre* falls inside gets selected (stored as a Set of keys). Then Recolour / Delete / Copy / Paste. Paste offsets by **2 cells** — an even number — because shifting by 1 would swap apex and base rows and break the weave pattern ("parity").
+- **Selection (marquee)** — drag a box; any **coloured** bead whose *centre* falls inside gets selected (stored as a Set of keys). Empty beads are never selectable — a selection is always a motif you actually drew. Then Recolour / Delete, or feed it to the pattern maker.
+- **Pattern maker** — repeats the selected motif across the whole canvas in one of three classic textile layouts: **Grid** (straight rows and columns of copies), **Brick** (every other row of copies slides sideways by half a tile, like a brick wall), and **Half-drop** (every other *column* of copies drops down by half a tile). The **gap** number adds empty beads between copies. The repeat is anchored on your original motif, so your drawing becomes one tile of the pattern. The whole pattern is a single undo step — tap undo and only your motif remains, so trying all three layouts costs nothing.
+- One rule hides inside the pattern math: copies only ever sit at **even** column/row offsets from the original. Shifting by 1 would land apex-row beads on tilted rows and break the weave pattern — programmers call this keeping the "parity". It's also why a half-tile shift is rounded to an even number.
 
 ### Pointer handling — who is touching, and with what?
 
@@ -173,7 +179,7 @@ const redoStack = useRef([])   // futures, after an undo
 
 Because every edit *replaces* the beads Map with a new one (never mutates the old), "remembering the past" is just **keeping the old Map reference** — costs almost nothing. Undo = push the current Map onto the redo pile, restore the top of the undo pile.
 
-The subtlety is **granularity**: one drag-stroke paints dozens of beads, but should undo as *one* step. So a stroke snapshots the Map once at pointer-down and commits that snapshot only if the stroke actually changed something. One-shot edits (flood fill, recolour/delete/paste selection, clear canvas) go through a small `commit()` helper that snapshots only when the edit really changed the Map. History is capped at 50 steps; any new edit clears the redo pile (you can't redo into a future you've overwritten). Desktop: `Ctrl/⌘+Z`, `Ctrl/⌘+Shift+Z`, or the ↶ ↷ buttons by the zoom control.
+The subtlety is **granularity**: one drag-stroke paints dozens of beads, but should undo as *one* step. So a stroke snapshots the Map once at pointer-down and commits that snapshot only if the stroke actually changed something. One-shot edits (flood fill, recolour/delete selection, applying a pattern, clear canvas) go through a small `commit()` helper that snapshots only when the edit really changed the Map. History is capped at 50 steps; any new edit clears the redo pile (you can't redo into a future you've overwritten). Desktop: `Ctrl/⌘+Z`, `Ctrl/⌘+Shift+Z`, or the ↶ ↷ buttons by the zoom control.
 
 ### Saving — three localStorage homes
 
