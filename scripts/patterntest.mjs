@@ -46,6 +46,19 @@ await page.mouse.up()
 await page.waitForTimeout(300)
 const selText = await page.locator('.selCard .cardTitle').first().innerText()
 
+// Clear selection must zero the count (the card stays while tool = select)
+await page.getByRole('button', { name: 'Clear selection' }).click()
+await page.waitForTimeout(150)
+const afterClear = await page.locator('.selCard .cardTitle').first().innerText()
+console.log('AFTER CLEAR SELECTION:', afterClear)
+
+// reselect the motif for the pattern screenshots
+await page.mouse.move(cx - 120, cy - 80)
+await page.mouse.down()
+await page.mouse.move(cx + 120, cy + 80, { steps: 6 })
+await page.mouse.up()
+await page.waitForTimeout(200)
+
 // breathing room between repeats so the layouts are tellable apart
 const gap = page.locator('.selCard .pill input')
 await gap.click()
@@ -140,6 +153,28 @@ for (const [mode, label] of [['grid', 'Grid'], ['brick', 'Brick'], ['halfdrop', 
   await undoBtn.click()
   await page.waitForTimeout(150)
 }
+
+// layout swap: Grid then Brick WITHOUT undo must REPLACE the grid, not stack
+await page.getByRole('button', { name: 'Grid', exact: true }).click()
+await page.waitForTimeout(150)
+await page.getByRole('button', { name: 'Brick', exact: true }).click()
+await page.waitForTimeout(150)
+const swap = await readBeads()
+const swapBad = swap.filter(([c, r]) => !checks.brick(c - minC, r - minR))
+console.log(
+  'SWAP GRID→BRICK:',
+  swap.length,
+  'beads,',
+  swapBad.length ? `STACKED/WRONG: ${JSON.stringify(swapBad.slice(0, 5))}` : 'replaced OK'
+)
+// one undo from a swapped layout goes straight back to the bare motif
+await undoBtn.click()
+await page.waitForTimeout(150)
+const afterUndo = await readBeads()
+console.log(
+  'UNDO AFTER SWAP:',
+  afterUndo.length === motif.length ? 'back to motif OK' : `expected ${motif.length} beads, got ${afterUndo.length}`
+)
 
 console.log('PAGE ERRORS:', errors.length ? errors.join('\n') : 'none')
 await browser.close()

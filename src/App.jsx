@@ -108,22 +108,51 @@ export default function Home() {
   const undoStack = useRef([])
   const redoStack = useRef([])
   const strokeBase = useRef(null) // beads Map at stroke start
+  const patternBaseRef = useRef(null) // beads before the last pattern apply (see makePattern)
+
+  // Repaint the canvas straight from beadsRef on the next animation frame —
+  // no React render. Pencil strokes go through this: re-rendering the whole
+  // component tree per pointer event (120–240Hz) churned enough memory to get
+  // the tab killed on iPad Safari.
+  const rafRef = useRef(0)
+  const drawRef = useRef(null) // latest drawScene (assigned every render below)
+  const requestRedraw = useCallback(() => {
+    if (rafRef.current) return
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0
+      const canvas = canvasRef.current
+      if (canvas && drawRef.current) drawRef.current(canvas.getContext('2d'))
+    })
+  }, [])
 
   // SINGLE write path for the design Map. beadsRef is advanced SYNCHRONOUSLY,
   // never via an effect: React renders lag behind fast pencil events, so a new
   // stroke reading render-time state could start from a stale Map and wipe the
   // previous stroke. Everything that changes beads must go through applyBeads.
-  const applyBeads = useCallback((next) => {
+  // silent = repaint only (strokes); endDrag syncs React state once per stroke.
+  const applyBeads = useCallback((next, silent = false) => {
     if (typeof next === 'function') next = next(beadsRef.current)
     if (next === beadsRef.current) return
     beadsRef.current = next
-    setBeads(next)
-  }, [])
+    patternBaseRef.current = null // any normal edit ends pattern layout-swapping
+    if (silent) requestRedraw()
+    else setBeads(next)
+  }, [requestRedraw])
 
+  // History is capped by TOTAL stored beads as well as steps: 50 snapshots of a
+  // dense full-canvas design is hundreds of MB — enough for iPad Safari to kill
+  // the tab. The budget keeps memory flat; at least one undo step always stays.
+  const HISTORY_BEAD_BUDGET = 250000
   const pushHistory = (prev) => {
-    undoStack.current.push(prev)
-    if (undoStack.current.length > HISTORY_MAX) undoStack.current.shift()
+    const st = undoStack.current
+    st.push(prev)
     redoStack.current = []
+    let total = 0
+    for (const m of st) total += m.size
+    while (st.length > HISTORY_MAX || (st.length > 1 && total > HISTORY_BEAD_BUDGET)) {
+      total -= st[0].size
+      st.shift()
+    }
   }
 
   const commit = useCallback((updater) => {
@@ -298,7 +327,7 @@ export default function Home() {
           }
         }
         return next || prev
-      })
+      }, true) // silent: strokes repaint via rAF, no React render per event
     },
     [brushCells, color, applyBeads]
   )
@@ -364,6 +393,11 @@ export default function Home() {
 
   const makePattern = (mode) => {
     if (!selection.size) return
+    // Clicking another layout (or re-clicking after a gap change) REPLACES the
+    // previous pattern instead of stacking on top of it: while the last edit
+    // was a pattern apply, we rebuild from the beads as they were before it.
+    // Any other edit nulls patternBaseRef (in applyBeads) and ends swapping.
+    const base = patternBaseRef.current || beadsRef.current
     // motif = the selected coloured beads, relative to an even-snapped origin
     let minC = Infinity
     let minR = Infinity
@@ -371,7 +405,7 @@ export default function Home() {
     let maxR = -Infinity
     const cells = []
     for (const k of selection) {
-      const fill = beadsRef.current.get(k)
+      const fill = base.get(k)
       if (!fill) continue
       const [c, r] = k.split(',').map(Number)
       cells.push({ c, r, fill })
@@ -394,31 +428,33 @@ export default function Home() {
       const s = Math.floor(n / 2)
       return Math.max(2, s - (s % 2))
     }
-    commit((prev) => {
-      const next = new Map(prev)
-      // tile indices covering the grid (one extra column for the brick shift)
-      const i0 = -Math.ceil(minC / px) - 1
-      const i1 = Math.ceil((cols - minC) / px)
-      const j0 = -Math.ceil(minR / py)
-      const j1 = Math.ceil((rows - minR) / py)
-      for (let j = j0; j <= j1; j++) {
-        for (let i = i0; i <= i1; i++) {
-          if (i === 0 && j === 0) continue // the motif itself stays as-is
-          let oc = minC + i * px
-          let or = minR + j * py
-          const oddBand = (((mode === 'brick' ? j : i) % 2) + 2) % 2 === 1
-          if (mode === 'brick' && oddBand) oc += half(px)
-          if (mode === 'halfdrop' && oddBand) or += half(py)
-          for (const { dc, dr, fill } of motif) {
-            const c = oc + dc
-            const r = or + dr
-            if (c < 0 || c >= cols || r < 0 || r >= rows || !beadExists(c, r)) continue
-            next.set(key(c, r), fill)
-          }
+    const next = new Map(base)
+    // tile indices covering the grid (one extra column for the brick shift)
+    const i0 = -Math.ceil(minC / px) - 1
+    const i1 = Math.ceil((cols - minC) / px)
+    const j0 = -Math.ceil(minR / py)
+    const j1 = Math.ceil((rows - minR) / py)
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        if (i === 0 && j === 0) continue // the motif itself stays as-is
+        let oc = minC + i * px
+        let or = minR + j * py
+        const oddBand = (((mode === 'brick' ? j : i) % 2) + 2) % 2 === 1
+        if (mode === 'brick' && oddBand) oc += half(px)
+        if (mode === 'halfdrop' && oddBand) or += half(py)
+        for (const { dc, dr, fill } of motif) {
+          const c = oc + dc
+          const r = or + dr
+          if (c < 0 || c >= cols || r < 0 || r >= rows || !beadExists(c, r)) continue
+          next.set(key(c, r), fill)
         }
       }
-      return next
-    })
+    }
+    // first apply pushes ONE undo step (back to the pre-pattern design);
+    // layout swaps reuse it, so undo from any layout returns to the motif
+    if (!patternBaseRef.current) pushHistory(base)
+    applyBeads(next)
+    patternBaseRef.current = base // re-arm: applyBeads just cleared it
   }
 
   // desktop keyboard: Ctrl/⌘+Z undo, Ctrl/⌘+Shift+Z redo
@@ -512,11 +548,14 @@ export default function Home() {
       ctx.lineWidth = 1.25 / scale
       ctx.strokeStyle = '#cdcac3'
 
+      // beadsRef (not the `beads` state) so silent stroke repaints are visible;
+      // `beads` stays in the deps so committed edits still trigger the effect
+      const liveBeads = beadsRef.current
       for (let row = r0; row < r1; row++) {
         for (let col = c0; col < c1; col++) {
           if (!beadExists(col, row)) continue
           const { cx, cy } = geo.centerFor(col, row)
-          const fill = beads.get(key(col, row))
+          const fill = liveBeads.get(key(col, row))
           if (simple) {
             if (fill) {
               ctx.fillStyle = fill
@@ -573,6 +612,7 @@ export default function Home() {
     },
     [viewport, view, geo, beads, bg, bgT, bgShown, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee]
   )
+  drawRef.current = drawScene // the rAF repaint path always uses the latest
 
   // size the canvas to the viewport (never to the document)
   useEffect(() => {
@@ -788,14 +828,14 @@ export default function Home() {
         if (s.snapped && n === s.lastN) return
         s.snapped = true
         s.lastN = n
-        applyBeads(paintAlong(strokeBase.current, lineSamples(s.start, snap)))
+        applyBeads(paintAlong(strokeBase.current, lineSamples(s.start, snap)), true)
         return
       }
       if (s.snapped) {
         // was a snapped line, now curving: give back the freehand path
         s.snapped = false
         s.locked = true
-        applyBeads(paintAlong(strokeBase.current, s.pts))
+        applyBeads(paintAlong(strokeBase.current, s.pts), true)
         return
       }
       // clearly not straight by now → stop evaluating for this stroke
@@ -915,6 +955,7 @@ export default function Home() {
     // history: commit the stroke as ONE undo step, only if it changed beads
     if (strokeBase.current && strokeBase.current !== beadsRef.current) {
       pushHistory(strokeBase.current)
+      setBeads(beadsRef.current) // strokes were silent — sync React state once
     }
     strokeBase.current = null
     strokeRef.current = null

@@ -153,6 +153,17 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
   (the half-tile shift is floored to even, min 2). One pattern = one undo step.
   Verified by `scripts/patterntest.mjs` (asserts the exact lattice of all
   three layouts).
+- **Layout buttons SWAP, never stack** (2026-06-11, user report: "it is making
+  all the patterns when I click one by one"). While the last edit was a pattern
+  apply, clicking another layout (or changing gap and re-clicking) rebuilds
+  from the pre-pattern design; any other edit ends swap mode. Undo from any
+  layout returns straight to the bare motif.
+- **iPad Safari crash fixes** (2026-06-11, "Safari shuts down after a few
+  strokes"): (1) strokes repaint the canvas via requestAnimationFrame straight
+  from `beadsRef` — no React re-render per pencil event (was 120–240 full
+  renders/s); React state syncs once at stroke end. (2) Undo history is capped
+  by TOTAL stored beads (250k) as well as 50 steps — 50 snapshots of a dense
+  full-canvas pattern was hundreds of MB.
 - **Brush size** slider (1–6): brush>1 paints all beads within a growing radius.
 - **Recent colours** (up to 5), auto-tracked on draw/fill, shown above the palette.
 - **Empty beads** drawn very-slight grey (#eaeaeb), not white.
