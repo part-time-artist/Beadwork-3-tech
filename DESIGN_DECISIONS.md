@@ -168,6 +168,17 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
 - **Recent colours** (up to 5), auto-tracked on draw/fill, shown above the palette.
 - **Empty beads** drawn very-slight grey (#eaeaeb), not white.
 
+## Packed bead view (2026-06-11)
+- Problem: real beads touch with almost no ground showing, so woven motifs read
+  instantly; on screen each bead was drawn at true size on the lattice pitch,
+  so designs looked like scattered dots.
+- Fix: **"Packed" view (default)** draws FILLED beads enlarged by
+  `PACKED_DRAW` (1.15) so neighbours kiss like the real weave. Empty cells stay
+  true-size (grid stays readable). Pure rendering — bead centres, hit-testing,
+  bead counts and the printed chart are untouched. "Spaced" toggle (Bead size
+  card) restores the exact-size view. Persisted with Save artwork. Visual
+  check: `scripts/packedview.mjs` (packed/spaced/zoom screenshots).
+
 ## iPad / Apple Pencil pass (locked 2026-06-10)
 1. Primary device is **iPad + Apple Pencil**. Pencil (and desktop mouse) draws;
    **single-finger drag pans only** (Procreate-style — no stray marks).
