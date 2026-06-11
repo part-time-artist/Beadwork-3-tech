@@ -390,11 +390,14 @@ export default function Home() {
     clearSelection()
   }
 
-  // ---- duplicate & place ----------------------------------------------------
-  // Duplicate copies the selected coloured beads into a ghost "stamp" that
-  // follows pen/mouse drags on the canvas; Place commits it as one undo step.
-  // placing = { motif: [{dc,dr,fill}], baseC, baseR, c, r } — (c,r) is the
-  // current origin cell, (baseC,baseR) the original one (needed for parity).
+  // ---- duplicate / move & place ----------------------------------------------
+  // Duplicate copies the selected coloured beads into a ghost "stamp"; Move
+  // turns the selection itself into the ghost (originals hidden until placed
+  // or cancelled). The ghost follows pen/mouse drags on the canvas; Place
+  // commits as one undo step. placing = { mode: 'copy'|'move', motif:
+  // [{dc,dr,fill}], baseC, baseR, c, r, hide } — (c,r) is the current origin
+  // cell, (baseC,baseR) the original one (needed for parity), hide = original
+  // bead keys to suppress while a move is in flight.
   const [placing, setPlacing] = useState(null)
   const placeDrag = useRef(null) // grab offset between pointer and ghost origin
 
@@ -412,7 +415,7 @@ export default function Home() {
     return { c, r }
   }
 
-  const duplicateSelection = () => {
+  const startPlacing = (mode) => {
     if (!selection.size) return
     let minC = Infinity
     let minR = Infinity
@@ -430,31 +433,43 @@ export default function Home() {
     minC -= minC % 2
     minR -= minR % 2
     const motif = cells.map(({ c, r, fill }) => ({ dc: c - minC, dr: r - minR, fill }))
-    // the ghost starts just below-right of the original (+1 col +2 rows is a
-    // parity-valid offset) so the user can see it's a separate copy
-    setPlacing({ motif, baseC: minC, baseR: minR, c: minC + 1, r: minR + 2 })
+    setPlacing({
+      mode,
+      motif,
+      baseC: minC,
+      baseR: minR,
+      // a copy starts just below-right of the original (+1 col +2 rows is a
+      // parity-valid offset) so the user can see it's a separate copy; a move
+      // starts in place — the originals fade where they are
+      c: mode === 'move' ? minC : minC + 1,
+      r: mode === 'move' ? minR : minR + 2,
+      // a move hides the originals while in flight; nothing is deleted until
+      // Place, so Cancel simply unhides them
+      hide: mode === 'move' ? new Set(cells.map(({ c, r }) => key(c, r))) : null,
+    })
     clearSelection() // one highlight at a time: the ghost is the focus now
   }
 
-  const placeDuplicate = () => {
+  const placeMotif = () => {
     if (!placing) return
     const sel = new Set()
     commit((prev) => {
       let next = null
+      const ensure = () => (next = next || new Map(prev))
+      if (placing.mode === 'move') {
+        for (const k of placing.hide) if (prev.has(k)) ensure().delete(k)
+      }
       for (const { dc, dr, fill } of placing.motif) {
         const c = placing.c + dc
         const r = placing.r + dr
         if (c < 0 || c >= cols || r < 0 || r >= rows || !beadExists(c, r)) continue
         const k = key(c, r)
         sel.add(k)
-        if ((next || prev).get(k) !== fill) {
-          next = next || new Map(prev)
-          next.set(k, fill)
-        }
+        if ((next || prev).get(k) !== fill) ensure().set(k, fill)
       }
       return next || prev
     })
-    setSelection(sel) // the placed copy becomes the selection — Duplicate again to chain
+    setSelection(sel) // the placed beads become the selection — chain freely
     setPlacing(null)
   }
 
@@ -638,7 +653,10 @@ export default function Home() {
         for (let col = c0; col < c1; col++) {
           if (!beadExists(col, row)) continue
           const { cx, cy } = geo.centerFor(col, row)
-          const fill = liveBeads.get(key(col, row))
+          const k = key(col, row)
+          // beads being MOVED draw only as the ghost, not at their old spot
+          // (nothing is deleted until Place, so Cancel just unhides them)
+          const fill = placing?.hide?.has(k) ? undefined : liveBeads.get(k)
           if (simple) {
             if (fill) {
               ctx.fillStyle = fill
@@ -1379,18 +1397,22 @@ export default function Home() {
               <button className="ghost" onClick={deleteSelection} disabled={!selection.size}>Delete</button>
             </div>
             {!placing && (
-              <button className="ghost" onClick={duplicateSelection} disabled={!selection.size}>Duplicate &amp; place</button>
+              <div className="pillRow">
+                <button className="ghost half" onClick={() => startPlacing('copy')} disabled={!selection.size}>Duplicate</button>
+                <button className="ghost half" onClick={() => startPlacing('move')} disabled={!selection.size}>Move</button>
+              </div>
             )}
             {placing && (
               <>
-                <div className="cardTitle small">Placing copy</div>
+                <div className="cardTitle small">{placing.mode === 'move' ? 'Moving selection' : 'Placing copy'}</div>
                 <div className="pillRow">
-                  <button className="ghost half" onClick={placeDuplicate}>Place</button>
+                  <button className="ghost half" onClick={placeMotif}>Place</button>
                   <button className="ghost half" onClick={() => setPlacing(null)}>Cancel</button>
                 </div>
                 <div className="hint tip">
-                  Drag the faded copy on the canvas, then tap Place. The placed
-                  copy stays selected — Duplicate again to keep stamping.
+                  {placing.mode === 'move'
+                    ? 'Drag the faded beads to their new spot, then tap Place. Cancel puts them back.'
+                    : 'Drag the faded copy on the canvas, then tap Place. The placed copy stays selected — Duplicate again to keep stamping.'}
                 </div>
               </>
             )}

@@ -197,11 +197,15 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
   CAUTION comment if PDF export is ever revived. Visual check:
   `scripts/exportcheck.mjs` (60×20cm export, counts coloured pixels).
 
-## Duplicate & place (2026-06-11)
-- Selection card gains **Duplicate & place**: copies the selected coloured
-  beads into a 55%-alpha ghost; pen/mouse drag moves it (relative grab — no
-  jump), **Place** commits as one undo step, **Cancel** discards. The placed
-  copy becomes the new selection so duplicates chain.
+## Duplicate / Move & place (2026-06-11)
+- Selection card gains **Duplicate** and **Move**: both turn the selected
+  coloured beads into a 55%-alpha ghost; pen/mouse drag moves it (relative
+  grab — no jump), **Place** commits as one undo step, **Cancel** discards.
+  The placed beads become the new selection so operations chain.
+- Duplicate's ghost starts +1 col +2 rows from the original; Move's starts in
+  place with the originals *hidden, not deleted* (`placing.hide`) — Cancel
+  simply unhides them, Place deletes originals + writes the new spot in one
+  commit.
 - Ghost positions snap to **parity-valid origins** (row shift even, column
   parity = half the row shift) so every copied bead lands on an existing
   lattice node — same rule the pattern maker keeps. Fingers still pan

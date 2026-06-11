@@ -55,7 +55,7 @@ console.log(`selection card: ${selTitle.trim()}`)
 if (selTitle.includes('· 0')) fail('marquee selected nothing')
 
 // 4. duplicate → ghost appears; drag it well below the original
-await page.getByRole('button', { name: 'Duplicate & place' }).click()
+await page.getByRole('button', { name: 'Duplicate', exact: true }).click()
 await page.waitForTimeout(200)
 await page.screenshot({ path: 'scripts/view-dup-ghost.png' })
 await page.mouse.move(cx - 100, cy - 80)
@@ -86,6 +86,49 @@ console.log(`beads after undo: ${afterUndo} (expected ${before})`)
 if (afterUndo !== before) fail(`undo did not restore, got ${afterUndo}`)
 
 await page.screenshot({ path: 'scripts/view-dup-placed.png' })
+
+// 8. MOVE: reselect the original motif and move it — count unchanged, keys changed
+const beadKeys = async () => {
+  await page.getByRole('button', { name: /Save artwork|save again/ }).click()
+  await page.waitForTimeout(150)
+  return page.evaluate(() =>
+    JSON.parse(localStorage.getItem('beadwork3_design_v1')).beads.map(([k]) => k).sort()
+  )
+}
+const keysBefore = await beadKeys()
+await page.mouse.move(cx - 180, cy - 110)
+await page.mouse.down()
+await page.mouse.move(cx - 30, cy - 50, { steps: 10 })
+await page.mouse.up()
+await page.waitForTimeout(200)
+await page.getByRole('button', { name: 'Move', exact: true }).click()
+await page.waitForTimeout(200)
+await page.mouse.move(cx - 100, cy - 80)
+await page.mouse.down()
+await page.mouse.move(cx + 120, cy + 120, { steps: 12 })
+await page.mouse.up()
+await page.waitForTimeout(200)
+await page.getByRole('button', { name: 'Place', exact: true }).click()
+await page.waitForTimeout(200)
+const keysAfter = await beadKeys()
+console.log(`move: beads ${keysBefore.length} -> ${keysAfter.length}`)
+if (keysAfter.length !== keysBefore.length) fail('move changed the bead count')
+if (JSON.stringify(keysAfter) === JSON.stringify(keysBefore)) fail('move did not move anything')
+
+// 9. cancel restores hidden originals untouched
+await page.mouse.move(cx + 60, cy + 60)
+await page.mouse.down()
+await page.mouse.move(cx + 160, cy + 160, { steps: 10 })
+await page.mouse.up()
+await page.waitForTimeout(200)
+await page.getByRole('button', { name: 'Move', exact: true }).click()
+await page.waitForTimeout(200)
+await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+await page.waitForTimeout(200)
+const keysCancel = await beadKeys()
+if (JSON.stringify(keysCancel) !== JSON.stringify(keysAfter)) fail('cancel changed beads')
+console.log('cancel: beads untouched')
+
 console.log('PAGE ERRORS:', errors.length ? errors.join('\n') : 'none')
 console.log(process.exitCode ? 'RESULT: FAIL' : 'RESULT: PASS')
 await browser.close()
