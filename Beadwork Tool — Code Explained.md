@@ -20,6 +20,7 @@ The app is a single web page. There is no server, no database — everything run
 | `src/App.jsx` | **The whole app**: every button, the canvas, all behaviour |
 | `src/lib/geometry.js` | **All the bead-grid math** — pure, no UI |
 | `src/lib/chart.js` | Draws the **printable chart** the artisan reads at the loom |
+| `src/lib/store.js` | **Saves artworks** in the browser's larger database (IndexedDB) |
 | `src/techniques/` | **One file per weave** (3-bead, 1-bead) — picks the grid rules |
 
 That's the whole app — four files. The leftover folders from the open-source
@@ -340,6 +341,48 @@ before this feature have no tag, so they're treated as 3-bead (which they were).
 
 ---
 
+## 6.6 Saving & the "My artworks" gallery
+
+You can keep **many artworks** and switch between them. When you open the tool it
+shows **My artworks** — a list of everything you've made (name · weave · bead
+count · when you last touched it) — or, if you were just working, it reopens your
+**last artwork** so you can carry on. From the editor, **← My artworks** (in the
+*This artwork* card) takes you back to the list.
+
+> [!info] How saving works now
+> There's **no Save button** — your open artwork **saves itself** a moment after
+> you stop drawing (this is called *auto-save*; it waits ~0.6s so it isn't saving
+> on every single pencil mark). Each artwork is one **record** — its name, weave,
+> the whole design, and the time you last edited it.
+
+**Where it's stored.** Earlier the tool used the browser's tiny storage box
+(`localStorage`, ~5 MB — fine for a handful of designs). It now uses
+**IndexedDB**, the browser's *bigger* database, so you can keep lots of artworks
+(and their reference images). `src/lib/store.js` is a thin wrapper around it:
+`listArtworks`, `getArtwork`, `putArtwork`, `deleteArtwork`, plus a small
+`meta` box that remembers which artwork to reopen. The first time you load the
+new version, your old saved designs are **carried over automatically**.
+
+**New artworks are named after the forest** (*Morii* means forest): Oak, Willow,
+Cedar, Birch… (`TREE_NAMES` / `nextTreeName` in `App.jsx`). Rename anytime.
+
+**Backups.** It's all on this one device, so the gallery has **Back up all**
+(saves every artwork into one file) and **Import file / backup** (restores them,
+or adds a single design someone shared). *This artwork → Export* saves just the
+open one. The reference image you trace under the beads is now saved **inside**
+the artwork (stored as the image's own text form, a *data URL*), so it's still
+there when you reopen — it used to vanish.
+
+> [!tip] One subtlety the 1-bead weave exposed
+> The 1-bead grid has small **gaps** between beads. The "what bead is under the
+> pen?" test originally only counted a hit if you touched the bead's oval — so a
+> stroke could slip through the gaps and draw nothing. The fix: for a full grid
+> (1-bead), the whole **cell** counts as that bead (`hitCell` in the technique),
+> so tapping anywhere paints. The overlapping 3-bead weave never had gaps, so it
+> keeps the original oval test.
+
+---
+
 ## 7. Where to make common changes
 
 - 3-bead weave spacing looks off → `PACK_X` / `PACK_Y` in `geometry.js`
@@ -347,6 +390,10 @@ before this feature have no tag, so they're treated as 3-bead (which they were).
 - Bead shape too round/boxy → `beadShapeN` in the technique file (3-bead `2.4`, 1-bead `3.4`)
 - Lean angle of base beads → `Math.PI / 4` (45°) in `tiltFor`, `techniques/threeBead.js`
 - Add a whole new weave → a new file in `techniques/` + list it in `techniques/index.js`
+- New-artwork names (the trees) → `TREE_NAMES` in `App.jsx`
+- Auto-save delay → the `600` (ms) in the auto-save `useEffect`, `App.jsx`
+- Where artworks are stored → `src/lib/store.js` (IndexedDB names at the top)
+- 1-bead "tap anywhere in a cell to paint" → `hitCell` in `techniques/oneBead.js`
 - Chart numbering direction → `rowLabel` / `colLabel` in `chart.js`
 - Guide-line frequency → `GUIDE_EVERY` in `chart.js`
 - Printed bead size → `printBeadMm` (default 8 mm)

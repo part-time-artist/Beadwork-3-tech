@@ -19,6 +19,7 @@ export default defineTechnique({
   packX: PACK_X,
   packY: PACK_Y,
   stagger: false,
+  hitCell: true, // gaps between beads → the whole cell is paintable, not just the oval
 
   // no tilt — beads sit upright in a straight grid
   tiltFor: () => 0,

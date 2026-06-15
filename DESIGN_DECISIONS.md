@@ -322,6 +322,59 @@ IMPLEMENTED 2026-06-15 (`src/techniques/` registry):
   (chooser + aligned grid), `techpersist.mjs` (technique round-trips on reload),
   `exporttechcheck.mjs` (PNG charts for both: export-1bead.png / export-3bead.png).
 
+## My artworks gallery (grilling 2026-06-15)
+Replaces the split "Save artwork" (DESIGN_KEY) + "My designs" slots with one
+multi-artwork model. Supersedes "Named designs + design files" storage.
+LOCKED:
+1. **Device-local only.** Artworks live in this browser; Export/Import
+   `.beadwork.json` files are the backup/transfer path. No accounts, no server.
+2. **Quick-switch gallery, one artwork open at a time** (not multiple open
+   simultaneously).
+3. **Text list** — name · technique · beads · last-edited. No thumbnails.
+4. **Auto-save only.** The open artwork saves itself continuously; the manual
+   "Save artwork" button is removed. (Export stays for backups.)
+5. **Each artwork = one record**: id, name, technique, full design data,
+   last-edited time. Per-artwork actions: Open, Rename, Duplicate, Delete.
+6. **"+ New artwork"** → technique chooser → blank canvas. **"← My artworks"**
+   button returns to the list.
+7. **Storage moves localStorage → IndexedDB** (the ~5MB localStorage ceiling
+   can't hold many dense designs). Existing localStorage designs (named slots +
+   the quick-save) migrate into the gallery on first load — nothing lost.
+8. **On open: reopen the last-edited artwork** (continue where you left off);
+   the gallery is one tap away via "← My artworks". First-ever visit (nothing
+   saved) lands on the gallery → New artwork → technique chooser.
+9. **New artworks auto-name from a forest/tree list** (theme: Morii = forest —
+   e.g. Oak, Willow, Cedar, Birch, Rowan, Alder, Hazel, Fern, Moss, Aspen…).
+   Pick the next unused name; when the list is exhausted, append a number.
+   Rename anytime from the gallery. (No name prompt up front.)
+10. **Reference background images are saved with the artwork** (stored in
+    IndexedDB as a data URL) so they survive reopening — fixes the old
+    blob-URL-dies-with-session loss. Adds weight per artwork; acceptable.
+11. **"Export all" backup**: one button writes ALL artworks to a single backup
+    file; re-importing restores them. Per-artwork Export/Import stays too.
+Defaults (not separately grilled): gallery is a full-screen overlay in the
+existing chooser's visual language; auto-save is debounced (~after edits settle
++ on leaving); Delete keeps a confirm; Duplicate = "<name> copy"; a New artwork
+KEEPS canvas size, bead size, palette + spacing and resets only the background
+to plain (so a previous artwork's reference image can't carry over).
+
+IMPLEMENTED 2026-06-15:
+- `src/lib/store.js` = IndexedDB wrapper (list/get/put/delete artworks + meta
+  for lastOpenedId/migrated). One record = `designData()` + `id` + `updatedAt`.
+- App.jsx: `screen` ('loading'|'gallery'|'editor'), `artworks` (summaries),
+  `currentArtworkId`. Debounced auto-save (600ms) writes the open artwork.
+  Boot migrates the old localStorage designs once, then reopens the last-edited
+  (or shows the gallery). New artworks auto-name via `nextTreeName`.
+- Reference bg images now read as data URLs (`onBgImage`) and reload into
+  bgImgRef on `applyDesign`, so they persist; switching artworks clears a stale
+  image. Manual "Save artwork" button removed; right panel "This artwork" card
+  = name + ← My artworks + Export this artwork; gallery has Import/Back-up-all.
+- Bug found + fixed during build: the 1-bead grid has GAPS between beads, so the
+  oval hit-test left gaps unpaintable (a stroke could thread between beads). The
+  technique now sets `hitCell: true` (defineTechnique) → the whole rectangular
+  cell maps to its bead. The staggered 3-bead weave keeps the oval hit-test.
+- Verified: scripts/gallerycheck, onebeaddraw, migratecheck, bgcheck.
+
 ## iPad / Apple Pencil pass (locked 2026-06-10)
 1. Primary device is **iPad + Apple Pencil**. Pencil (and desktop mouse) draws;
    **single-finger drag pans only** (Procreate-style — no stray marks).

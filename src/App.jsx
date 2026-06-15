@@ -1,6 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { getTechnique, DEFAULT_TECHNIQUE, TECHNIQUES } from './techniques'
 import { renderFullChart, renderLegend, rasterScale } from './lib/chart'
+import {
+  listArtworks,
+  getArtwork,
+  putArtwork,
+  deleteArtwork as dbDeleteArtwork,
+  getMeta,
+  setMeta,
+} from './lib/store'
 
 // ---- design tokens: "Nothing" design language (see .claude/skills/nothing-design).
 // Monochrome black/white/grey + one red accent used sparingly. Dotted-grid chrome,
@@ -41,6 +49,33 @@ const BEAD_SIZES = [
 ]
 
 const HISTORY_MAX = 50 // undo steps (one stroke / fill / selection op = one step)
+
+// New artworks auto-name from the forest (Morii = forest). Pick the next unused
+// name; once the list is exhausted, append a number ("Oak 2"…). Rename anytime.
+const TREE_NAMES = [
+  'Oak', 'Willow', 'Cedar', 'Birch', 'Rowan', 'Alder', 'Hazel', 'Aspen', 'Maple',
+  'Elm', 'Pine', 'Holly', 'Hawthorn', 'Juniper', 'Linden', 'Spruce', 'Larch',
+  'Beech', 'Ash', 'Yew', 'Fern', 'Moss', 'Ivy', 'Bramble', 'Thicket', 'Glade',
+]
+function nextTreeName(usedNames) {
+  const used = new Set(usedNames)
+  for (const t of TREE_NAMES) if (!used.has(t)) return t
+  for (let n = 2; ; n++) for (const t of TREE_NAMES) if (!used.has(`${t} ${n}`)) return `${t} ${n}`
+}
+
+// short "last edited" label for the gallery
+function timeAgo(ts) {
+  if (!ts) return '—'
+  const s = Math.floor((Date.now() - ts) / 1000)
+  if (s < 60) return 'just now'
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m} min ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h} hr ago`
+  const d = Math.floor(h / 24)
+  if (d < 7) return `${d} day${d > 1 ? 's' : ''} ago`
+  return new Date(ts).toLocaleDateString()
+}
 
 // Fully "packed" view: filled beads are DRAWN this much larger than their true
 // size, so neighbouring beads press together the way real woven beads do and a
@@ -1354,16 +1389,22 @@ export default function Home() {
   // ---- background image upload ----
   const onBgImage = (file) => {
     if (!file) return
-    const url = URL.createObjectURL(file)
-    const img = new Image()
-    img.onload = () => {
-      bgImgRef.current = img
-      setBg((b) => ({ ...b, type: 'image', image: url }))
-      setBgT({ x: 0, y: 0, scale: 1 })
-      setBgShown(true)
-      setBgAdjust(true) // go straight into placing the reference design
+    // Read as a DATA URL (not a blob URL): data URLs survive save/reload, so the
+    // reference image is stored in the artwork and comes back when reopened.
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result
+      const img = new Image()
+      img.onload = () => {
+        bgImgRef.current = img
+        setBg((b) => ({ ...b, type: 'image', image: dataUrl }))
+        setBgT({ x: 0, y: 0, scale: 1 })
+        setBgShown(true)
+        setBgAdjust(true) // go straight into placing the reference design
+      }
+      img.src = dataUrl
     }
-    img.src = url
+    reader.readAsDataURL(file)
   }
 
   // ---- export (print-ready chart: outlined beads + guides + numbers + legend) ----
@@ -1438,10 +1479,11 @@ export default function Home() {
     commit((prev) => (prev.size ? new Map() : prev))
   }
 
-  // ---- save artwork: persist in the tool so it reopens for editing next time ----
-  const [savedAt, setSavedAt] = useState(null)
-  const [designName, setDesignName] = useState('')
-  const [savedDesigns, setSavedDesigns] = useState([]) // [{ name, savedAt, data }]
+  // ---- artworks: each design is its own IndexedDB record; one open at a time ----
+  const [designName, setDesignName] = useState('') // the open artwork's name
+  const [screen, setScreen] = useState('loading') // 'loading' | 'gallery' | 'editor'
+  const [artworks, setArtworks] = useState([]) // lightweight gallery summaries
+  const [currentArtworkId, setCurrentArtworkId] = useState(null)
 
   // one design = one plain object: this is what every save path (quick-save,
   // named slot, exported file) writes and what applyDesign reads back
@@ -1473,6 +1515,16 @@ export default function Home() {
     if (Array.isArray(d.palette)) setPalette(d.palette)
     // older saves may hold the removed on-screen transparent background
     if (d.bg) setBg(d.bg.type === 'transparent' ? { ...d.bg, type: 'solid' } : d.bg)
+    // restore (or clear) the reference image: data-URL bg images are reloaded
+    // into bgImgRef so they draw; switching to a design without one clears the
+    // previous artwork's image so it can't linger on the canvas
+    if (d.bg && d.bg.type === 'image' && d.bg.image) {
+      const img = new Image()
+      img.onload = () => { bgImgRef.current = img; requestRedraw() }
+      img.src = d.bg.image
+    } else {
+      bgImgRef.current = null
+    }
     if (d.bgT) setBgT(d.bgT)
     if (typeof d.bgShown === 'boolean') setBgShown(d.bgShown)
     if (typeof d.pack === 'number') setPack(clampNum(d.pack, 0, 1))
@@ -1514,11 +1566,23 @@ export default function Home() {
     return true
   }
 
-  // Start a fresh artwork in the chosen technique. The technique is locked for
-  // the artwork's life, so switching = a blank canvas (the design data, history
-  // and selection are reset). Canvas size, bead size and palette carry over.
-  const newArtwork = (id) => {
-    setTechniqueId(id)
+  // lightweight gallery row (the full design stays in IndexedDB, not in state)
+  const summarize = (rec) => {
+    const t = getTechnique(rec.technique)
+    return {
+      id: rec.id,
+      name: rec.name || 'Untitled',
+      technique: t.label,
+      beads: (rec.layers || []).reduce((n, l) => n + (l.beads ? l.beads.length : 0), 0),
+      updatedAt: rec.updatedAt || 0,
+    }
+  }
+
+  // Blank the canvas for a fresh artwork in `techId`. Layers/history/selection
+  // reset; the background resets to plain so a previous artwork's reference
+  // image can't linger. Canvas size, bead size, palette and spacing carry over.
+  const resetDesign = (techId) => {
+    setTechniqueId(techId)
     const l = makeLayer('Layer 1')
     layersRef.current = [l]
     activeIdRef.current = l.id
@@ -1531,43 +1595,81 @@ export default function Home() {
     setBeads(l.beads)
     setSelection(new Set())
     setPlacing(null)
-    setDesignName('')
-    setSavedAt(null)
-    setChooser(null)
+    setBg({ type: 'solid', color: '#FFFFFF', image: null })
+    bgImgRef.current = null
+    setBgT({ x: 0, y: 0, scale: 1 })
+    setBgShown(true)
+    setBgAdjust(false)
   }
 
-  const saveArtwork = () => {
-    try {
-      localStorage.setItem(DESIGN_KEY, JSON.stringify(designData()))
-      setSavedAt(Date.now())
-    } catch (e) {
-      window.alert('Could not save — the design may be too large for browser storage.')
-    }
-  }
-
-  // ---- named design slots (multiple designs in this browser) ----
-  const persistDesigns = (list) => {
-    setSavedDesigns(list)
-    try {
-      localStorage.setItem(DESIGNS_KEY, JSON.stringify(list))
-    } catch (e) {
-      window.alert('Could not save — browser storage is full. Delete a design or use Export file.')
-    }
-  }
-
-  const saveDesignAs = () => {
-    const name = designName.trim() || 'untitled'
+  // Create + open a new artwork (from the technique chooser). Auto-named from the
+  // forest. Persisted immediately so it appears in the gallery before the first
+  // edit; auto-save keeps it current after.
+  const createArtwork = (techId) => {
+    resetDesign(techId)
+    const id = uid()
+    const name = nextTreeName(artworks.map((a) => a.name))
     setDesignName(name)
-    const slot = { name, savedAt: Date.now(), data: { ...designData(), name } }
-    // same name = overwrite that slot
-    persistDesigns([...savedDesigns.filter((s) => s.name !== name), slot])
+    setCurrentArtworkId(id)
+    setChooser(null)
+    setScreen('editor')
+    const rec = {
+      id, updatedAt: Date.now(), version: 2, name, technique: techId,
+      canvasCm, beadMM, palette, pack,
+      bg: { type: 'solid', color: '#FFFFFF', image: null },
+      bgT: { x: 0, y: 0, scale: 1 }, bgShown: true,
+      layers: [{ name: 'Layer 1', visible: true, locked: false, beads: [] }],
+      activeIndex: 0,
+    }
+    putArtwork(rec).catch(() => {})
+    setArtworks((a) => [...a, summarize(rec)])
+    setMeta('lastOpenedId', id).catch(() => {})
   }
 
-  const loadDesign = (slot) => {
-    if (applyDesign(slot.data, { undoable: true })) setDesignName(slot.name)
+  // Open an existing artwork into the editor. Undo history doesn't cross
+  // artworks, so it's cleared.
+  const openArtwork = async (id) => {
+    const rec = await getArtwork(id)
+    if (!rec || !applyDesign(rec)) return
+    undoStack.current = []
+    redoStack.current = []
+    setCurrentArtworkId(id)
+    setScreen('editor')
+    setMeta('lastOpenedId', id).catch(() => {})
   }
 
-  // ---- design file (move a design between devices) ----
+  const renameArtwork = async (id, raw) => {
+    const name = (raw || '').trim()
+    if (!name) return
+    const rec = await getArtwork(id)
+    if (!rec) return
+    rec.name = name
+    rec.updatedAt = Date.now()
+    await putArtwork(rec)
+    setArtworks((a) => a.map((x) => (x.id === id ? { ...x, name } : x)))
+    if (id === currentArtworkId) setDesignName(name)
+  }
+
+  const duplicateArtwork = async (id) => {
+    const rec = await getArtwork(id)
+    if (!rec) return
+    const copy = { ...rec, id: uid(), name: `${rec.name || 'Untitled'} copy`, updatedAt: Date.now() }
+    await putArtwork(copy)
+    setArtworks((a) => [...a, summarize(copy)])
+  }
+
+  const removeArtwork = async (id) => {
+    if (!window.confirm('Delete this artwork? This cannot be undone.')) return
+    await dbDeleteArtwork(id)
+    setArtworks((a) => a.filter((x) => x.id !== id))
+    if (id === currentArtworkId) {
+      setCurrentArtworkId(null)
+      setScreen('gallery')
+    }
+  }
+
+  // ---- design files (move/back up between devices) ----
+  // Export the OPEN artwork as a single <name>.beadwork.json.
   const exportDesignFile = () => {
     const name = designName.trim() || 'beadwork-design'
     const blob = new Blob([JSON.stringify(designData())], { type: 'application/json' })
@@ -1578,35 +1680,120 @@ export default function Home() {
     URL.revokeObjectURL(link.href)
   }
 
+  // Export EVERY artwork to one backup file.
+  const exportAllArtworks = async () => {
+    const all = await listArtworks()
+    const blob = new Blob(
+      [JSON.stringify({ version: 2, kind: 'beadwork-backup', artworks: all })],
+      { type: 'application/json' }
+    )
+    const link = document.createElement('a')
+    link.download = `beadwork-backup-${new Date().toISOString().slice(0, 10)}.json`
+    link.href = URL.createObjectURL(blob)
+    link.click()
+    URL.revokeObjectURL(link.href)
+  }
+
+  const isDesign = (d) => d && typeof d === 'object' && (Array.isArray(d.layers) || Array.isArray(d.beads))
+
+  // Import a file: a single design becomes a new artwork (and opens); a backup
+  // file ("Export all") restores all its artworks into the gallery.
   const onDesignFile = async (file) => {
     if (!file) return
     try {
       const d = JSON.parse(await file.text())
-      if (!applyDesign(d, { undoable: true })) throw new Error('not a design')
-      // files saved before names existed: fall back to the file's own name
-      if (typeof d.name !== 'string' || !d.name) {
-        setDesignName(file.name.replace(/(\.beadwork)?\.json$/i, ''))
+      if (d && d.kind === 'beadwork-backup' && Array.isArray(d.artworks)) {
+        for (const a of d.artworks) {
+          if (isDesign(a)) await putArtwork({ ...a, id: uid(), updatedAt: a.updatedAt || Date.now() })
+        }
+        const all = await listArtworks()
+        setArtworks(all.map(summarize))
+        setScreen('gallery')
+        return
       }
+      if (!isDesign(d)) throw new Error('not a design')
+      const id = uid()
+      const name =
+        (typeof d.name === 'string' && d.name) ||
+        file.name.replace(/(\.beadwork)?\.json$/i, '') ||
+        nextTreeName(artworks.map((a) => a.name))
+      const rec = { id, updatedAt: Date.now(), ...d, name }
+      await putArtwork(rec)
+      setArtworks((a) => [...a, summarize(rec)])
+      openArtwork(id)
     } catch (e) {
-      window.alert('Could not read that file — it does not look like a beadwork design file.')
+      window.alert('Could not read that file — it does not look like a beadwork design or backup file.')
     }
   }
 
-  // restore the last saved artwork + the named-design list on load. With no
-  // saved artwork (first-ever visit) the technique chooser opens to force a
-  // choice before drawing — one artwork = one technique, picked up front.
+  // ---- auto-save: the open artwork persists itself (debounced) ----
+  // React state (incl. `layers`) is the trigger, so silent pencil strokes are
+  // caught at stroke end when setLayers runs. designData() reads the live refs.
+  const saveTimer = useRef(0)
   useEffect(() => {
-    let restored = false
+    if (screen !== 'editor' || !currentArtworkId) return
+    clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      const rec = { id: currentArtworkId, updatedAt: Date.now(), ...designData() }
+      putArtwork(rec)
+        .then(() => setArtworks((a) => a.map((x) => (x.id === rec.id ? summarize(rec) : x))))
+        .catch(() => {})
+    }, 600)
+    return () => clearTimeout(saveTimer.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, currentArtworkId, layers, canvasCm, beadMM, palette, bg, bgT, bgShown, pack, designName, techniqueId])
+
+  // ---- one-time migration of the old localStorage designs into IndexedDB ----
+  const migrateFromLocalStorage = async () => {
+    if (await getMeta('migrated')) return
+    const recs = []
     try {
-      const raw = localStorage.getItem(DESIGN_KEY)
-      if (raw) restored = applyDesign(JSON.parse(raw))
+      const list = JSON.parse(localStorage.getItem(DESIGNS_KEY) || 'null')
+      if (Array.isArray(list)) {
+        for (const slot of list) {
+          if (slot && isDesign(slot.data)) {
+            recs.push({ id: uid(), updatedAt: slot.savedAt || Date.now(), ...slot.data, name: slot.name || slot.data.name || 'Untitled' })
+          }
+        }
+      }
     } catch (e) {}
     try {
-      const raw = localStorage.getItem(DESIGNS_KEY)
-      const list = raw && JSON.parse(raw)
-      if (Array.isArray(list)) setSavedDesigns(list)
+      const d = JSON.parse(localStorage.getItem(DESIGN_KEY) || 'null')
+      // the quick-save, unless it's already one of the named slots above
+      if (isDesign(d) && !recs.some((r) => JSON.stringify(r.layers) === JSON.stringify(d.layers))) {
+        recs.push({ id: uid(), updatedAt: Date.now(), ...d, name: d.name || 'Untitled' })
+      }
     } catch (e) {}
-    if (!restored) setChooser('start')
+    for (const r of recs) await putArtwork(r)
+    await setMeta('migrated', true)
+  }
+
+  // ---- boot: migrate, then reopen the last-edited artwork (or show the gallery) ----
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        await migrateFromLocalStorage()
+        const all = await listArtworks()
+        if (cancelled) return
+        setArtworks(all.map(summarize))
+        if (!all.length) { setScreen('gallery'); return }
+        const lastId = await getMeta('lastOpenedId')
+        const last =
+          all.find((a) => a.id === lastId) ||
+          all.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0]
+        if (cancelled) return
+        applyDesign(last)
+        undoStack.current = []
+        redoStack.current = []
+        setCurrentArtworkId(last.id)
+        setScreen('editor')
+      } catch (e) {
+        if (!cancelled) setScreen('gallery')
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ---- UI ----
@@ -2009,60 +2196,15 @@ export default function Home() {
           )}
         </div>
 
-        {/* My designs — named slots in this browser + a file for moving devices */}
+        {/* This artwork — name + auto-save status + a file to move it elsewhere */}
         <div className="card">
-          <div className="cardTitle">My designs</div>
-          <div className="techRow">
-            <span className="techNow">{tech.label}</span>
-            <button className="ghost newArt" onClick={() => setChooser('new')}>+ New artwork</button>
-          </div>
-          <div className="pillRow">
-            <Pill value={designName} label="name" text onChange={setDesignName} />
-            <button className="ghost" onClick={saveDesignAs}>Save</button>
-          </div>
-          {savedDesigns.length > 0 && (
-            <div className="savedList">
-              {savedDesigns.map((s, i) => (
-                <div className="savedItem" key={i}>
-                  <button
-                    className="savedApply"
-                    onClick={() => loadDesign(s)}
-                    title={`Open “${s.name}” (undo brings the current design back)`}
-                  >
-                    <span className="savedName">{s.name}</span>
-                    <span className="savedMeta">
-                      {(s.data.layers
-                        ? s.data.layers.reduce((n, l) => n + (l.beads?.length || 0), 0)
-                        : s.data.beads?.length || 0)} beads · {new Date(s.savedAt).toLocaleDateString()}
-                    </span>
-                  </button>
-                  <button
-                    className="x"
-                    title="Delete design"
-                    onClick={() => {
-                      if (window.confirm(`Delete “${s.name}”? This cannot be undone.`))
-                        persistDesigns(savedDesigns.filter((_, k) => k !== i))
-                    }}
-                  >×</button>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="pillRow">
-            <button className="ghost half" onClick={exportDesignFile}>Export file</button>
-            <label className="ghost half fileBtn">
-              Import file
-              <input
-                type="file"
-                accept=".json,application/json"
-                style={{ display: 'none' }}
-                onChange={(e) => { onDesignFile(e.target.files[0]); e.target.value = '' }}
-              />
-            </label>
-          </div>
+          <div className="cardTitle">This artwork</div>
+          <Pill value={designName} label="name" text onChange={setDesignName} />
+          <button className="ghost" onClick={() => setScreen('gallery')}>← My artworks</button>
+          <button className="ghost" onClick={exportDesignFile}>Export this artwork</button>
           <div className="hint tip">
-            Saved designs live in this browser. To move one to another device,
-            Export file here and Import file there.
+            Saves itself automatically. Open another, or manage all your artworks,
+            from My artworks. Export to back up or move to another device.
           </div>
         </div>
 
@@ -2090,8 +2232,7 @@ export default function Home() {
 
         <div className="saveCluster">
           <button className="primary" onClick={exportPNG}>Save PNG</button>
-          <button className="ghost" onClick={saveArtwork}>{savedAt ? 'Saved ✓ — save again' : 'Save artwork'}</button>
-          <div className="hint tip">{savedAt ? 'Design saved — reopens here for editing.' : 'Save artwork keeps the design in this browser.'}</div>
+          <div className="hint tip">Your work auto-saves. “Save PNG” makes the printable chart for the artisan.</div>
         </div>
       </aside>
 
@@ -2103,23 +2244,78 @@ export default function Home() {
         />
       )}
 
-      {/* technique chooser — at first start (forced) or via New artwork. The
-          choice is fixed for the artwork's life. */}
+      {/* My artworks gallery — covers the editor when not editing. Loading state
+          while the boot read of IndexedDB resolves. */}
+      {screen !== 'editor' && (
+        <div className="galleryScrim">
+          {screen === 'loading' ? (
+            <div className="galleryLoading">Loading your artworks…</div>
+          ) : (
+            <div className="gallery">
+              <div className="galleryHead">
+                <div className="brand big">MY ARTWORKS<span className="dot" /></div>
+                <button className="primary newBtn" onClick={() => setChooser(true)}>+ New artwork</button>
+              </div>
+              {artworks.length === 0 ? (
+                <div className="galleryEmpty">
+                  No artworks yet. Tap <b>+ New artwork</b> to plant your first one.
+                </div>
+              ) : (
+                <div className="galleryList">
+                  {[...artworks]
+                    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+                    .map((a) => (
+                      <div className="artRow" key={a.id}>
+                        <button className="artOpen" onClick={() => openArtwork(a.id)} title="Open">
+                          <span className="artName">{a.name}</span>
+                          <span className="artMeta">{a.technique} · {a.beads} beads · {timeAgo(a.updatedAt)}</span>
+                        </button>
+                        <div className="artActions">
+                          <button onClick={() => { const n = window.prompt('Rename artwork:', a.name); if (n !== null) renameArtwork(a.id, n) }}>Rename</button>
+                          <button onClick={() => duplicateArtwork(a.id)}>Duplicate</button>
+                          <button className="del" onClick={() => removeArtwork(a.id)}>Delete</button>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+              <div className="galleryFoot">
+                <label className="ghost fileBtn half">
+                  Import file / backup
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    style={{ display: 'none' }}
+                    onChange={(e) => { onDesignFile(e.target.files[0]); e.target.value = '' }}
+                  />
+                </label>
+                <button className="ghost half" onClick={exportAllArtworks} disabled={!artworks.length}>Back up all</button>
+              </div>
+              <div className="hint tip galleryHint">
+                Artworks are saved in this browser. “Back up all” keeps a safety
+                copy you can re-import here or on another device.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* technique chooser — opens from "New artwork". The choice is fixed for
+          the new artwork's life. */}
       {chooser && (
         <div className="modalScrim">
           <div className="modal">
             <div className="modalTitle">CHOOSE A TECHNIQUE</div>
             <div className="modalSub">
-              {chooser === 'new'
-                ? 'Starts a fresh, blank artwork. The technique is fixed once chosen — switching later means starting again.'
-                : 'Pick the weave this artwork is for. The technique is fixed for this artwork; changing it later starts a new one.'}
+              Starts a fresh, blank artwork. The technique is fixed once chosen —
+              switching later means starting a new artwork.
             </div>
             <div className="techGrid">
               {TECHNIQUES.map((t) => (
                 <button
                   key={t.id}
-                  className={`techCard ${t.id === techniqueId ? 'on' : ''}`}
-                  onClick={() => newArtwork(t.id)}
+                  className="techCard"
+                  onClick={() => createArtwork(t.id)}
                 >
                   <span className="techName">{t.label}</span>
                   <span className="techDesc">
@@ -2130,9 +2326,7 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            {chooser === 'new' && (
-              <button className="ghost" onClick={() => setChooser(null)}>Cancel</button>
-            )}
+            <button className="ghost" onClick={() => setChooser(null)}>Cancel</button>
           </div>
         </div>
       )}
@@ -2411,7 +2605,6 @@ export default function Home() {
         .savedApply:hover { background: #242424; }
         .savedName { font-family: ${T.mono}; font-size: 10px; color: ${T.ink};
           text-transform: uppercase; letter-spacing: 0.06em; }
-        .savedMeta { font-family: ${T.mono}; font-size: 9px; color: ${T.inkSoft}; }
         .savedSw { display: flex; flex-wrap: wrap; gap: 3px; }
         .savedSw i { width: 14px; height: 14px; border-radius: 3px; display: block;
           box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
@@ -2434,13 +2627,6 @@ export default function Home() {
           transition: opacity 0.12s;
         }
         .primary:hover { opacity: 0.88; }
-
-        /* current technique + New artwork */
-        .techRow { display: flex; align-items: center; gap: 8px; }
-        .techNow { flex: 1; min-width: 0; font-family: ${T.mono}; font-size: 10px;
-          color: ${T.ink}; text-transform: uppercase; letter-spacing: 0.06em;
-          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .newArt { flex-shrink: 0; width: auto; padding: 8px 12px; font-size: 11px; }
 
         /* technique chooser modal */
         .modalScrim {
@@ -2474,6 +2660,56 @@ export default function Home() {
         .techCard.on { border-color: ${T.accent}; }
         .techName { font-size: 14px; font-weight: 700; color: ${T.ink}; }
         .techDesc { font-family: ${T.mono}; font-size: 10px; line-height: 1.5; color: ${T.inkSoft}; }
+
+        /* My artworks gallery (covers the editor when not editing) */
+        .galleryScrim {
+          position: fixed; inset: 0; z-index: 50; display: flex;
+          align-items: flex-start; justify-content: center; overflow-y: auto;
+          padding: 40px 24px; background: ${T.bg};
+          background-image: radial-gradient(${T.line} 1px, transparent 1px);
+          background-size: 16px 16px;
+        }
+        .galleryLoading {
+          margin-top: 18vh; font-family: ${T.mono}; font-size: 12px;
+          letter-spacing: 0.1em; color: ${T.inkSoft};
+        }
+        .gallery {
+          width: 100%; max-width: 640px; display: flex; flex-direction: column; gap: 16px;
+        }
+        .galleryHead { display: flex; align-items: center; justify-content: space-between; }
+        .brand.big { font-size: 22px; }
+        .newBtn { width: auto; padding: 12px 18px; }
+        .galleryEmpty {
+          font-family: ${T.mono}; font-size: 12px; line-height: 1.7; color: ${T.inkSoft};
+          background: ${T.panelSolid}; border: 1px solid ${T.line};
+          border-radius: ${T.radius}px; padding: 28px; text-align: center;
+        }
+        .galleryEmpty b { color: ${T.ink}; }
+        .galleryList { display: flex; flex-direction: column; gap: 8px; }
+        .artRow {
+          display: flex; align-items: stretch; gap: 8px;
+          background: ${T.panelSolid}; border: 1px solid ${T.line};
+          border-radius: ${T.radius}px; padding: 6px;
+        }
+        .artOpen {
+          flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px;
+          background: none; border: none; cursor: pointer; text-align: left; padding: 8px 10px;
+          border-radius: 5px; transition: background 0.12s;
+        }
+        .artOpen:hover { background: ${T.pill}; }
+        .artName { font-size: 14px; font-weight: 700; color: ${T.ink};
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .artMeta { font-family: ${T.mono}; font-size: 10px; color: ${T.inkSoft}; }
+        .artActions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+        .artActions button {
+          border: none; background: ${T.pill}; color: ${T.ink}; cursor: pointer;
+          font-family: ${T.mono}; font-size: 9px; text-transform: uppercase;
+          letter-spacing: 0.04em; padding: 8px 9px; border-radius: 6px;
+        }
+        .artActions button:hover { background: #242424; }
+        .artActions .del:hover { color: #fff; background: ${T.accent}; }
+        .galleryFoot { display: flex; gap: 8px; }
+        .galleryHint { text-align: center; }
       `}</style>
     </div>
   )
