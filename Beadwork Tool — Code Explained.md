@@ -224,6 +224,42 @@ All colours/fonts live in one object `T` at the top ("design tokens" — change 
 
 ---
 
+## 5b. Layers (like Procreate) — added 2026-06-15
+
+**The idea:** instead of one sheet of beads, the design is now a *stack* of
+sheets ("layers"). You might put the border on one, the main motif on another,
+and the background on a third — so editing one never disturbs the others.
+
+**The key rule:** a real bead is one solid colour, so layers can't blend like
+Procreate's paint. Where two visible layers both fill the same bead node, the
+**top layer wins** (it simply covers the one below — nothing is deleted).
+
+**How it's built (the simple version):**
+- Each layer is its own beads Map plus a name, a *visible* flag and a *locked*
+  flag. They live in the `layers` array, ordered **bottom → top**.
+- One layer is *active* (`activeId`). To avoid rewriting every drawing tool, the
+  active layer's Map is mirrored into the same old `beads` / `beadsRef` the
+  whole app already used — so **all the drawing code keeps working unchanged and
+  automatically paints only the active layer.** Every write is copied back into
+  the stack.
+- **Undo** now remembers the *whole stack* at each step (it was just one Map
+  before). So undo reverses both bead strokes and layer actions like add/delete/
+  merge. Cheap, because unchanged layers are shared, not copied.
+- **Drawing the screen** (`drawScene`) walks the visible layers top-to-bottom
+  per bead and draws the first colour it finds (`fillAt`). **Export**
+  (`flattenVisible`) squashes the visible layers into one Map → the single chart
+  the artisan reads.
+- **Saving** now stores `layers` + which one was active; old saves with a single
+  `beads` list are auto-converted into one layer when opened.
+- A layer that's **hidden or locked** can't be drawn on (a small note appears,
+  and the tools are disabled).
+
+The panel is the floating box you open with the **Layers** button on the right
+tool strip: an eye to show/hide, the name (double-click to rename), a lock, the
+bead count, and Dup / Merge↓ / move / Del actions.
+
+---
+
 ## 6. Vocabulary cheat-sheet
 
 | Term | Meaning here |
@@ -256,3 +292,7 @@ All colours/fonts live in one object `T` at the top ("design tokens" — change 
 - Undo history depth → `HISTORY_MAX` in `App.jsx` (default 50)
 - Multi-finger tap feel → the `350` ms / `12` px thresholds in `onPointerMove`/`liftTouch`, `App.jsx`
 - Zoom limits → the `0.02, 8` clamps in `zoomAt` and the pinch handler
+- Layer compositing (who wins on overlap) → `fillAt` in `drawScene`, `App.jsx`
+- What export includes → `flattenVisible` in `App.jsx`
+- New-layer name / where it inserts → `addLayer` in `App.jsx`
+- Layers panel look → the `.layersPanel` styles in `App.jsx`

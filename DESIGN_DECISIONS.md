@@ -233,6 +233,53 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
   these — a design carries its own canvas/palette/spacing.
 - Visual check: `scripts/designscheck.mjs` (save/load/export/import/reload).
 
+## Layers feature (grilling 2026-06-15)
+LOCKED so far:
+1. **Purpose: separate design parts** (border / motif / background on different
+   layers) so editing one never disturbs the others. Not blend-driven.
+2. **Stacking: top layer wins.** Each lattice node holds one solid bead; the
+   topmost VISIBLE layer's bead covers lower ones (opaque). Lower bead hidden,
+   not deleted. No opacity blending (a woven bead is one solid colour).
+3. **Per-layer controls: show/hide, reorder, lock, rename, duplicate, merge
+   down, delete** (full layer management).
+4. **Export: flatten visible layers** top-down into the single artisan chart;
+   hidden layers omitted. (No per-layer sheets.)
+5. **Flood-fill bounds the ACTIVE layer only** — spreads through the active
+   layer's beads, stops at its colour boundaries, ignores other layers' beads.
+6. **UI: floating Procreate-style layers panel** (top-right, opened by a
+   button), not a side-panel card — keeps the side panels uncluttered, touch-friendly.
+7. **Other layers shown normally** (full colour, real composite while editing);
+   hide via the eye toggle. No onion-skin dimming.
+
+Defaults taken (no objection raised — change if wrong):
+- D1. All edit tools (draw / erase / select / pattern maker / duplicate / move)
+  act on the **active layer only**.
+- D2. New design starts with **one layer ("Layer 1")**; old saves + .beadwork.json
+  files **migrate to a single layer**. Saves now store a layers array (each =
+  its own bead Map + name/visible/locked) and the active-layer index.
+- D3. **Background (solid colour / reference image) stays a global element
+  beneath ALL layers**, not per-layer.
+- D4. Painting on a **hidden or locked active layer does nothing** (no auto-show).
+- D5. Merge-down composites with the same **top-wins** rule; new layers insert
+  **above** the active one. Total-bead perf cap (250k, existing) spans all layers.
+
+IMPLEMENTED 2026-06-15 (in `src/App.jsx`):
+- Model: `layers` = array bottom→top of `{id,name,visible,locked,beads:Map}` +
+  `activeId`. `beads`/`beadsRef` mirror the ACTIVE layer so every existing edit
+  path (strokes, fill, selection, pattern, duplicate) is unchanged and naturally
+  acts on the active layer only. `applyBeads` syncs the active Map back into the
+  stack (deferred during silent strokes; `endDrag` calls `syncActiveLayer`).
+- Undo/redo now snapshot the whole document (`{layers,activeId}`) — bead edits
+  AND layer ops (add/delete/duplicate/merge/reorder) are one undo step each;
+  visibility/lock/rename/switch-active are NOT undoable. Bead budget counts all
+  layers. `currentDoc`/`applyDoc` are the snapshot/restore pair.
+- Render: `drawScene` composites visible layers top-wins (`fillAt`); active uses
+  live `beadsRef`. Export `flattenVisible()` flattens visible layers for the chart.
+- Save format v2: `layers:[…]` + `activeIndex`; old single-`beads` saves migrate
+  to one layer (`applyDesign`). UI: floating panel toggled from the tool strip.
+- Verified by `scripts/layercheck.mjs` (fresh=1 layer, separate Maps, add/undo,
+  hidden layer excluded from export). Screenshot `scripts/view-layers.png`.
+
 ## iPad / Apple Pencil pass (locked 2026-06-10)
 1. Primary device is **iPad + Apple Pencil**. Pencil (and desktop mouse) draws;
    **single-finger drag pans only** (Procreate-style — no stray marks).

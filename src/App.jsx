@@ -94,7 +94,22 @@ export default function Home() {
   const [viewport, setViewport] = useState({ w: 1, h: 1 })
 
   // ---- design data ----
-  const [beads, setBeads] = useState(() => new Map())
+  // The design is a STACK of layers (array order = bottom→top; index 0 is the
+  // bottom). Each layer is its own bead Map. `beads`/`beadsRef` mirror the
+  // ACTIVE layer, so every existing edit path (strokes, fill, selection,
+  // pattern, duplicate) keeps operating on a single Map; writes are synced back
+  // into the active layer entry. Where two visible layers fill the same node
+  // the TOP one wins (a woven bead is one solid colour — no blending).
+  const uid = () => Math.random().toString(36).slice(2, 9)
+  const makeLayer = (name, beadMap = new Map()) => ({
+    id: uid(), name, visible: true, locked: false, beads: beadMap,
+  })
+  const firstLayerRef = useRef(null)
+  if (!firstLayerRef.current) firstLayerRef.current = makeLayer('Layer 1')
+  const [layers, setLayers] = useState(() => [firstLayerRef.current])
+  const [activeId, setActiveId] = useState(() => firstLayerRef.current.id)
+  const [beads, setBeads] = useState(() => firstLayerRef.current.beads)
+  const [showLayers, setShowLayers] = useState(false)
   const [tool, setTool] = useState('draw') // draw | erase | select
   const [color, setColor] = useState('#F3CEDE') // starts on the palette's pink
   const [orient, setOrient] = useState('woven') // uniform | woven (tilted 3-bead)
@@ -114,6 +129,15 @@ export default function Home() {
   // commits it only if the stroke changed something); one-shot edits (fill,
   // selection ops, clear) go through `commit`, which snapshots only on change.
   const beadsRef = useRef(beads)
+  // Live mirrors of the layer stack + active id, updated SYNCHRONOUSLY by the
+  // layer writers below (React state lags behind fast pencil events). beadsRef
+  // is always the active layer's Map; layersRef is the whole stack.
+  const layersRef = useRef(null)
+  if (!layersRef.current) layersRef.current = layers
+  const activeIdRef = useRef(activeId)
+  // the active layer can be edited only when it is visible and unlocked; the
+  // ref lets pointer handlers (closures) read the latest value
+  const canEditRef = useRef(true)
   const undoStack = useRef([])
   const redoStack = useRef([])
   const strokeBase = useRef(null) // beads Map at stroke start
@@ -139,27 +163,67 @@ export default function Home() {
   // stroke reading render-time state could start from a stale Map and wipe the
   // previous stroke. Everything that changes beads must go through applyBeads.
   // silent = repaint only (strokes); endDrag syncs React state once per stroke.
+  // Write the active layer's new bead Map into the live stack too. Deferred for
+  // silent strokes (rebuilding the array 240×/s would defeat the rAF path) —
+  // endDrag calls syncActiveLayer once at stroke end to commit it to React.
+  const writeActiveLayer = (map) => {
+    const nl = layersRef.current.map((l) =>
+      l.id === activeIdRef.current ? { ...l, beads: map } : l
+    )
+    layersRef.current = nl
+    return nl
+  }
+  const syncActiveLayer = () => setLayers(writeActiveLayer(beadsRef.current))
+
   const applyBeads = useCallback((next, silent = false) => {
     if (typeof next === 'function') next = next(beadsRef.current)
     if (next === beadsRef.current) return
     beadsRef.current = next
     patternBaseRef.current = null // any normal edit ends pattern layout-swapping
     if (silent) requestRedraw()
-    else setBeads(next)
+    else {
+      setBeads(next)
+      setLayers(writeActiveLayer(next))
+    }
   }, [requestRedraw])
 
-  // History is capped by TOTAL stored beads as well as steps: 50 snapshots of a
-  // dense full-canvas design is hundreds of MB — enough for iPad Safari to kill
-  // the tab. The budget keeps memory flat; at least one undo step always stays.
+  // A history entry is a whole-document snapshot { layers, activeId }. Layer
+  // bead Maps are immutable (replaced on change), so a snapshot just shares the
+  // unchanged Map references — cheap, like the single-Map snapshots before.
+  // currentDoc reads the LIVE refs (never stale React state).
+  const currentDoc = () => ({ layers: layersRef.current, activeId: activeIdRef.current })
+  const docBeads = (doc) => {
+    let t = 0
+    for (const l of doc.layers) t += l.beads.size
+    return t
+  }
+
+  // Restore a document snapshot into both the live refs and React state.
+  const applyDoc = (doc) => {
+    layersRef.current = doc.layers
+    const active = doc.layers.find((l) => l.id === doc.activeId) || doc.layers[0]
+    activeIdRef.current = active ? active.id : null
+    beadsRef.current = active ? active.beads : new Map()
+    patternBaseRef.current = null
+    setLayers(doc.layers)
+    setActiveId(activeIdRef.current)
+    setBeads(beadsRef.current)
+    setSelection(new Set())
+    setPlacing(null)
+  }
+
+  // History is capped by TOTAL stored beads (across all layers) as well as
+  // steps: 50 snapshots of a dense full-canvas design is hundreds of MB —
+  // enough for iPad Safari to kill the tab. At least one step always stays.
   const HISTORY_BEAD_BUDGET = 250000
-  const pushHistory = (prev) => {
+  const pushHistory = (prevDoc) => {
     const st = undoStack.current
-    st.push(prev)
+    st.push(prevDoc)
     redoStack.current = []
     let total = 0
-    for (const m of st) total += m.size
+    for (const d of st) total += docBeads(d)
     while (st.length > HISTORY_MAX || (st.length > 1 && total > HISTORY_BEAD_BUDGET)) {
-      total -= st[0].size
+      total -= docBeads(st[0])
       st.shift()
     }
   }
@@ -168,20 +232,135 @@ export default function Home() {
     const prev = beadsRef.current
     const next = updater(prev)
     if (next === prev) return
-    pushHistory(prev)
+    pushHistory(currentDoc())
     applyBeads(next)
   }, [applyBeads])
 
   const undo = useCallback(() => {
     if (!undoStack.current.length) return
-    redoStack.current.push(beadsRef.current)
-    applyBeads(undoStack.current.pop())
-  }, [applyBeads])
+    redoStack.current.push(currentDoc())
+    applyDoc(undoStack.current.pop())
+  }, [])
   const redo = useCallback(() => {
     if (!redoStack.current.length) return
-    undoStack.current.push(beadsRef.current)
-    applyBeads(redoStack.current.pop())
-  }, [applyBeads])
+    undoStack.current.push(currentDoc())
+    applyDoc(redoStack.current.pop())
+  }, [])
+
+  // ---- layer operations ----------------------------------------------------
+  // Content changes (add/delete/duplicate/merge/reorder) are one undo step
+  // each; metadata toggles (visibility/lock/rename/switch-active) are not.
+  const switchLayer = (id) => {
+    const l = layersRef.current.find((x) => x.id === id)
+    if (!l || id === activeIdRef.current) return
+    activeIdRef.current = id
+    beadsRef.current = l.beads
+    setActiveId(id)
+    setBeads(l.beads)
+    setSelection(new Set()) // selection keys belong to the old active layer
+    setPlacing(null)
+    patternBaseRef.current = null
+  }
+
+  const makeActive = (l) => {
+    activeIdRef.current = l.id
+    beadsRef.current = l.beads
+    setActiveId(l.id)
+    setBeads(l.beads)
+  }
+
+  const addLayer = () => {
+    pushHistory(currentDoc())
+    const l = makeLayer(`Layer ${layersRef.current.length + 1}`)
+    const idx = layersRef.current.findIndex((x) => x.id === activeIdRef.current)
+    const nl = [...layersRef.current]
+    nl.splice(idx + 1, 0, l) // insert just above the active layer
+    layersRef.current = nl
+    setLayers(nl)
+    makeActive(l)
+    setSelection(new Set())
+    setPlacing(null)
+  }
+
+  const duplicateLayer = (id) => {
+    pushHistory(currentDoc())
+    const idx = layersRef.current.findIndex((l) => l.id === id)
+    const src = layersRef.current[idx]
+    const copy = { ...makeLayer(`${src.name} copy`, new Map(src.beads)), visible: src.visible }
+    const nl = [...layersRef.current]
+    nl.splice(idx + 1, 0, copy)
+    layersRef.current = nl
+    setLayers(nl)
+    makeActive(copy)
+    setSelection(new Set())
+    setPlacing(null)
+  }
+
+  const deleteLayer = (id) => {
+    if (layersRef.current.length <= 1) return // always keep at least one layer
+    pushHistory(currentDoc())
+    const nl = layersRef.current.filter((l) => l.id !== id)
+    layersRef.current = nl
+    setLayers(nl)
+    if (activeIdRef.current === id) makeActive(nl[nl.length - 1])
+    setSelection(new Set())
+    setPlacing(null)
+  }
+
+  // Merge a layer DOWN into the one below it; top-wins, so the upper layer's
+  // beads overwrite the lower's where they share a node.
+  const mergeDown = (id) => {
+    const idx = layersRef.current.findIndex((l) => l.id === id)
+    if (idx <= 0) return // nothing below to merge into
+    pushHistory(currentDoc())
+    const upper = layersRef.current[idx]
+    const lower = layersRef.current[idx - 1]
+    const merged = new Map(lower.beads)
+    for (const [k, v] of upper.beads) merged.set(k, v)
+    const lowerMerged = { ...lower, beads: merged }
+    const nl = [...layersRef.current]
+    nl[idx - 1] = lowerMerged
+    nl.splice(idx, 1)
+    layersRef.current = nl
+    setLayers(nl)
+    makeActive(lowerMerged)
+    setSelection(new Set())
+    setPlacing(null)
+  }
+
+  // dir +1 = move up toward the top, -1 = down toward the bottom
+  const moveLayer = (id, dir) => {
+    const idx = layersRef.current.findIndex((l) => l.id === id)
+    const j = idx + dir
+    if (j < 0 || j >= layersRef.current.length) return
+    pushHistory(currentDoc())
+    const nl = [...layersRef.current]
+    const [m] = nl.splice(idx, 1)
+    nl.splice(j, 0, m)
+    layersRef.current = nl
+    setLayers(nl)
+  }
+
+  const renameLayer = (id, name) => {
+    const nl = layersRef.current.map((l) => (l.id === id ? { ...l, name } : l))
+    layersRef.current = nl
+    setLayers(nl)
+  }
+  const toggleVisible = (id) => {
+    const nl = layersRef.current.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l))
+    layersRef.current = nl
+    setLayers(nl)
+    requestRedraw()
+  }
+  const toggleLock = (id) => {
+    const nl = layersRef.current.map((l) => (l.id === id ? { ...l, locked: !l.locked } : l))
+    layersRef.current = nl
+    setLayers(nl)
+  }
+
+  const activeLayer = layers.find((l) => l.id === activeId) || null
+  const canEdit = !!activeLayer && activeLayer.visible && !activeLayer.locked
+  canEditRef.current = canEdit
 
   // Per-cell tilt (radians). Apex (even) rows lie HORIZONTAL (rotated 90°).
   // Tilted (odd) rows: neighbouring beads MIRROR each other (+45/−45 along the
@@ -257,7 +436,7 @@ export default function Home() {
   // ---- mutate beads ----
   const floodFill = useCallback(
     (cell, useColor = color) => {
-      if (!cell) return
+      if (!cell || !canEditRef.current) return
       commit((prev) => {
         const target = prev.get(key(cell.col, cell.row)) || null
         if (target === useColor) return prev
@@ -371,7 +550,7 @@ export default function Home() {
   const clearSelection = () => setSelection(new Set())
 
   const recolorSelection = () => {
-    if (!selection.size) return
+    if (!selection.size || !canEdit) return
     pushRecent(color)
     commit((prev) => {
       const next = new Map(prev)
@@ -381,7 +560,7 @@ export default function Home() {
   }
 
   const deleteSelection = () => {
-    if (!selection.size) return
+    if (!selection.size || !canEdit) return
     commit((prev) => {
       const next = new Map(prev)
       for (const k of selection) next.delete(k)
@@ -416,7 +595,7 @@ export default function Home() {
   }
 
   const startPlacing = (mode) => {
-    if (!selection.size) return
+    if (!selection.size || !canEdit) return
     let minC = Infinity
     let minR = Infinity
     const cells = []
@@ -451,7 +630,7 @@ export default function Home() {
   }
 
   const placeMotif = () => {
-    if (!placing) return
+    if (!placing || !canEdit) return
     const sel = new Set()
     commit((prev) => {
       let next = null
@@ -484,7 +663,7 @@ export default function Home() {
   const [patternGap, setPatternGap] = useState(0) // empty beads between repeats
 
   const makePattern = (mode) => {
-    if (!selection.size) return
+    if (!selection.size || !canEdit) return
     // Clicking another layout (or re-clicking after a gap change) REPLACES the
     // previous pattern instead of stacking on top of it: while the last edit
     // was a pattern apply, we rebuild from the beads as they were before it.
@@ -543,8 +722,9 @@ export default function Home() {
       }
     }
     // first apply pushes ONE undo step (back to the pre-pattern design);
-    // layout swaps reuse it, so undo from any layout returns to the motif
-    if (!patternBaseRef.current) pushHistory(base)
+    // layout swaps reuse it, so undo from any layout returns to the motif. The
+    // snapshot's active layer holds `base` (== beadsRef.current on first apply).
+    if (!patternBaseRef.current) pushHistory(currentDoc())
     applyBeads(next)
     patternBaseRef.current = base // re-arm: applyBeads just cleared it
   }
@@ -646,17 +826,35 @@ export default function Home() {
       const dw = Bw * drawScale
       const dh = Bh * drawScale
 
-      // beadsRef (not the `beads` state) so silent stroke repaints are visible;
-      // `beads` stays in the deps so committed edits still trigger the effect
+      // composite the visible layers TOP-wins. The active layer reads from
+      // beadsRef (live, so silent stroke repaints show); the others read their
+      // own Maps from `layers` state (they can't change mid-stroke). `beads`
+      // stays in the deps so committed active-layer edits still trigger redraw.
       const liveBeads = beadsRef.current
+      const visLayers = layers.filter((l) => l.visible)
+      const aId = activeId
+      const fillAt = (k) => {
+        for (let i = visLayers.length - 1; i >= 0; i--) {
+          const lay = visLayers[i]
+          if (lay.id === aId) {
+            // beads being MOVED draw only as the ghost, not at their old spot
+            // (nothing is deleted until Place, so Cancel just unhides them)
+            if (placing?.hide?.has(k)) continue
+            const v = liveBeads.get(k)
+            if (v) return v
+          } else {
+            const v = lay.beads.get(k)
+            if (v) return v
+          }
+        }
+        return undefined
+      }
       for (let row = r0; row < r1; row++) {
         for (let col = c0; col < c1; col++) {
           if (!beadExists(col, row)) continue
           const { cx, cy } = geo.centerFor(col, row)
           const k = key(col, row)
-          // beads being MOVED draw only as the ghost, not at their old spot
-          // (nothing is deleted until Place, so Cancel just unhides them)
-          const fill = placing?.hide?.has(k) ? undefined : liveBeads.get(k)
+          const fill = fillAt(k)
           if (simple) {
             if (fill) {
               ctx.fillStyle = fill
@@ -726,7 +924,7 @@ export default function Home() {
         ctx.globalAlpha = 1
       }
     },
-    [viewport, view, geo, beads, bg, bgT, bgShown, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing]
+    [viewport, view, geo, beads, layers, activeId, bg, bgT, bgShown, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing]
   )
   drawRef.current = drawScene // the rAF repaint path always uses the latest
 
@@ -993,6 +1191,7 @@ export default function Home() {
       setMarquee(marqueeRef.current)
       return
     }
+    if (!canEditRef.current) return // active layer hidden or locked — no painting
     dragging.current = true
     strokeBase.current = beadsRef.current // history: snapshot at stroke start
     strokeRef.current = { start: p, pts: [], locked: false, snapped: false, lastN: -1 }
@@ -1080,10 +1279,13 @@ export default function Home() {
       marqueeRef.current = null
       setMarquee(null)
     }
-    // history: commit the stroke as ONE undo step, only if it changed beads
+    // history: commit the stroke as ONE undo step, only if it changed beads.
+    // Silent strokes never updated layersRef, so its active entry still holds
+    // the PRE-stroke Map — currentDoc() is the correct snapshot to undo to.
     if (strokeBase.current && strokeBase.current !== beadsRef.current) {
-      pushHistory(strokeBase.current)
+      pushHistory(currentDoc())
       setBeads(beadsRef.current) // strokes were silent — sync React state once
+      syncActiveLayer() // and fold the new beads into the layer stack
     }
     strokeBase.current = null
     strokeRef.current = null
@@ -1214,19 +1416,29 @@ export default function Home() {
     return bg
   }
 
-  const chartArgs = () => ({
-    beads,
-    cols,
-    rows,
-    tiltFor,
-    printBeadMm,
-    beadRatio,
-    background: chartBackground(),
-  })
+  // flatten the VISIBLE layers top-down into one Map — the single chart the
+  // artisan reads. Iterating bottom→top means the top layer's bead wins.
+  const flattenVisible = () => {
+    const m = new Map()
+    for (const l of layersRef.current) {
+      if (!l.visible) continue
+      for (const [k, v] of l.beads) m.set(k, v)
+    }
+    return m
+  }
 
   const exportPNG = () => {
-    const chart = renderFullChart(chartArgs())
-    const legend = renderLegend(beads)
+    const flat = flattenVisible()
+    const chart = renderFullChart({
+      beads: flat,
+      cols,
+      rows,
+      tiltFor,
+      printBeadMm,
+      beadRatio,
+      background: chartBackground(),
+    })
+    const legend = renderLegend(flat)
     const gap = 24
     const out = document.createElement('canvas')
     // stacking chart + legend can exceed the browser canvas ceiling even when
@@ -1251,8 +1463,12 @@ export default function Home() {
     link.click()
   }
 
-  // no confirm dialog: triggered by a press-and-hold button, and undo-able
-  const clearCanvas = () => commit((prev) => (prev.size ? new Map() : prev))
+  // no confirm dialog: triggered by a press-and-hold button, and undo-able.
+  // Clears the ACTIVE layer only (other layers are untouched, Procreate-style).
+  const clearCanvas = () => {
+    if (!canEdit) return
+    commit((prev) => (prev.size ? new Map() : prev))
+  }
 
   // ---- save artwork: persist in the tool so it reopens for editing next time ----
   const [savedAt, setSavedAt] = useState(null)
@@ -1262,15 +1478,19 @@ export default function Home() {
   // one design = one plain object: this is what every save path (quick-save,
   // named slot, exported file) writes and what applyDesign reads back
   const designData = () => ({
-    version: 1, name: designName, canvasCm, beadMM, palette, bg, bgT, bgShown, pack,
-    beads: [...beads.entries()],
+    version: 2, name: designName, canvasCm, beadMM, palette, bg, bgT, bgShown, pack,
+    layers: layersRef.current.map((l) => ({
+      name: l.name, visible: l.visible, locked: l.locked, beads: [...l.beads.entries()],
+    })),
+    activeIndex: Math.max(0, layersRef.current.findIndex((l) => l.id === activeIdRef.current)),
   })
 
   // Apply a design object from any source (browser storage, a named slot, an
   // imported file). undoable: loading over current work goes on the undo stack;
   // the boot-time restore doesn't (there is nothing to go back to).
   const applyDesign = (d, { undoable = false } = {}) => {
-    if (!d || typeof d !== 'object' || !Array.isArray(d.beads)) return false
+    if (!d || typeof d !== 'object' || (!Array.isArray(d.beads) && !Array.isArray(d.layers)))
+      return false
     if (d.canvasCm) setCanvasCm(d.canvasCm)
     // snap to the nearest offered size (older saves may hold removed sizes)
     if (d.beadMM) {
@@ -1289,8 +1509,37 @@ export default function Home() {
     // the 1.15× touching look, which is 0.75 on today's wider slider
     else if (typeof d.packed === 'boolean') setPack(d.packed ? 0.75 : 0)
     if (typeof d.name === 'string') setDesignName(d.name)
-    if (undoable) pushHistory(beadsRef.current)
-    applyBeads(new Map(d.beads))
+    // Build the layer stack: new saves carry `layers`; older single-Map saves
+    // and files migrate into one layer.
+    let nl = null
+    let activeIndex = 0
+    if (Array.isArray(d.layers) && d.layers.length) {
+      nl = d.layers.map((l) =>
+        makeLayer(
+          typeof l.name === 'string' ? l.name : 'Layer',
+          new Map(Array.isArray(l.beads) ? l.beads : [])
+        )
+      )
+      d.layers.forEach((l, i) => {
+        nl[i].visible = l.visible !== false
+        nl[i].locked = !!l.locked
+      })
+      activeIndex = clampNum(d.activeIndex || 0, 0, nl.length - 1)
+    } else if (Array.isArray(d.beads)) {
+      nl = [makeLayer('Layer 1', new Map(d.beads))]
+    }
+    if (!nl) return false
+    if (undoable) pushHistory(currentDoc())
+    const active = nl[activeIndex] || nl[0]
+    layersRef.current = nl
+    activeIdRef.current = active.id
+    beadsRef.current = active.beads
+    patternBaseRef.current = null
+    setLayers(nl)
+    setActiveId(active.id)
+    setBeads(active.beads)
+    setSelection(new Set())
+    setPlacing(null)
     return true
   }
 
@@ -1373,6 +1622,13 @@ export default function Home() {
         <div className="brand">BEADWORK<span className="dot" /></div>
         <div className="sub">3-BEAD TECHNIQUE</div>
 
+        {!canEdit && (
+          <div className="lockNote">
+            {activeLayer && !activeLayer.visible ? 'Active layer is hidden' : 'Active layer is locked'}
+            {' '}— drawing is off.
+          </div>
+        )}
+
         {tool !== 'select' && (
           <div className="brushRow">
             <span className="brushLabel">Brush</span>
@@ -1393,20 +1649,20 @@ export default function Home() {
           <div className="card selCard">
             <div className="cardTitle">Selection · {selection.size}</div>
             <div className="pillRow">
-              <button className="ghost" onClick={recolorSelection} disabled={!selection.size}>Recolour</button>
-              <button className="ghost" onClick={deleteSelection} disabled={!selection.size}>Delete</button>
+              <button className="ghost" onClick={recolorSelection} disabled={!selection.size || !canEdit}>Recolour</button>
+              <button className="ghost" onClick={deleteSelection} disabled={!selection.size || !canEdit}>Delete</button>
             </div>
             {!placing && (
               <div className="pillRow">
-                <button className="ghost half" onClick={() => startPlacing('copy')} disabled={!selection.size}>Duplicate</button>
-                <button className="ghost half" onClick={() => startPlacing('move')} disabled={!selection.size}>Move</button>
+                <button className="ghost half" onClick={() => startPlacing('copy')} disabled={!selection.size || !canEdit}>Duplicate</button>
+                <button className="ghost half" onClick={() => startPlacing('move')} disabled={!selection.size || !canEdit}>Move</button>
               </div>
             )}
             {placing && (
               <>
                 <div className="cardTitle small">{placing.mode === 'move' ? 'Moving selection' : 'Placing copy'}</div>
                 <div className="pillRow">
-                  <button className="ghost half" onClick={placeMotif}>Place</button>
+                  <button className="ghost half" onClick={placeMotif} disabled={!canEdit}>Place</button>
                   <button className="ghost half" onClick={() => setPlacing(null)}>Cancel</button>
                 </div>
                 <div className="hint tip">
@@ -1419,9 +1675,9 @@ export default function Home() {
             {selection.size > 0 && <button className="ghost" onClick={clearSelection}>Clear selection</button>}
             <div className="cardTitle small">Pattern maker</div>
             <div className="pillRow">
-              <button className="ghost" onClick={() => makePattern('grid')} disabled={!selection.size}>Grid</button>
-              <button className="ghost" onClick={() => makePattern('brick')} disabled={!selection.size}>Brick</button>
-              <button className="ghost" onClick={() => makePattern('halfdrop')} disabled={!selection.size}>½ drop</button>
+              <button className="ghost" onClick={() => makePattern('grid')} disabled={!selection.size || !canEdit}>Grid</button>
+              <button className="ghost" onClick={() => makePattern('brick')} disabled={!selection.size || !canEdit}>Brick</button>
+              <button className="ghost" onClick={() => makePattern('halfdrop')} disabled={!selection.size || !canEdit}>½ drop</button>
             </div>
             <Pill
               value={patternGap}
@@ -1570,7 +1826,78 @@ export default function Home() {
                 <span>{label}</span>
               </button>
             ))}
+            <span className="stripSep" />
+            <button
+              className={`stripBtn ${showLayers ? 'on' : ''}`}
+              onClick={() => setShowLayers((v) => !v)}
+              title="Layers"
+            >
+              <IconLayers />
+              <span>Layers</span>
+            </button>
           </div>
+
+          {/* floating Procreate-style layers panel (sits left of the tool strip) */}
+          {showLayers && (
+            <div className="layersPanel">
+              <div className="layersHead">
+                <span>LAYERS</span>
+                <button className="lpAdd" onClick={addLayer} title="New layer">+</button>
+              </div>
+              <div className="layersList">
+                {/* top of the stack shows first (array is bottom→top) */}
+                {[...layers].reverse().map((l) => (
+                    <div
+                      key={l.id}
+                      className={`layerRow ${l.id === activeId ? 'on' : ''}`}
+                      onClick={() => switchLayer(l.id)}
+                    >
+                      <button
+                        className="lpEye"
+                        onClick={(e) => { e.stopPropagation(); toggleVisible(l.id) }}
+                        title={l.visible ? 'Hide layer' : 'Show layer'}
+                      >
+                        {l.visible ? <IconEye /> : <IconEyeOff />}
+                      </button>
+                      <span
+                        className="lpName"
+                        onDoubleClick={() => {
+                          const name = window.prompt('Rename layer:', l.name)
+                          if (name !== null) renameLayer(l.id, name.trim() || l.name)
+                        }}
+                        title="Double-click to rename"
+                      >
+                        {l.name}
+                        {l.locked && <em className="lpLockTag">locked</em>}
+                      </span>
+                      <span className="lpCount">{l.beads.size}</span>
+                      <button
+                        className="lpLock"
+                        onClick={(e) => { e.stopPropagation(); toggleLock(l.id) }}
+                        title={l.locked ? 'Unlock layer' : 'Lock layer'}
+                      >
+                        {l.locked ? <IconLock /> : <IconUnlock />}
+                      </button>
+                    </div>
+                ))}
+              </div>
+              <div className="layerActions">
+                {(() => {
+                  const i = layers.findIndex((l) => l.id === activeId)
+                  return (
+                    <>
+                      <button onClick={() => duplicateLayer(activeId)} title="Duplicate active layer">Dup</button>
+                      <button onClick={() => mergeDown(activeId)} disabled={i <= 0} title="Merge active layer down">Merge↓</button>
+                      <button onClick={() => moveLayer(activeId, 1)} disabled={i >= layers.length - 1} title="Move up">↑</button>
+                      <button onClick={() => moveLayer(activeId, -1)} disabled={i <= 0} title="Move down">↓</button>
+                      <button onClick={() => deleteLayer(activeId)} disabled={layers.length <= 1} title="Delete active layer">Del</button>
+                    </>
+                  )
+                })()}
+              </div>
+              <div className="lpHint">Top layer wins where beads overlap. Export flattens visible layers.</div>
+            </div>
+          )}
           {/* image-adjust mode banner */}
           {bgAdjust && (
             <div className="adjustBar">
@@ -1703,7 +2030,9 @@ export default function Home() {
                   >
                     <span className="savedName">{s.name}</span>
                     <span className="savedMeta">
-                      {s.data.beads.length} beads · {new Date(s.savedAt).toLocaleDateString()}
+                      {(s.data.layers
+                        ? s.data.layers.reduce((n, l) => n + (l.beads?.length || 0), 0)
+                        : s.data.beads?.length || 0)} beads · {new Date(s.savedAt).toLocaleDateString()}
                     </span>
                   </button>
                   <button
@@ -1869,6 +2198,72 @@ export default function Home() {
           box-shadow: inset 0 0 0 1px ${T.accent};
         }
         .stripBtn.on svg { color: ${T.accent}; }
+        .stripSep { height: 1px; background: ${T.line}; margin: 3px 6px; }
+
+        /* floating Procreate-style layers panel */
+        .layersPanel {
+          position: absolute; right: 84px; top: 50%; transform: translateY(-50%);
+          width: 210px; max-height: 78%;
+          display: flex; flex-direction: column;
+          background: ${T.panelSolid}; border: 1px solid ${T.line};
+          border-radius: ${T.radius}px; padding: 8px;
+          box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 20;
+        }
+        .layersHead {
+          display: flex; align-items: center; justify-content: space-between;
+          font-family: ${T.mono}; font-size: 10px; letter-spacing: 0.12em;
+          color: ${T.inkSoft}; padding: 2px 4px 8px;
+        }
+        .lpAdd {
+          border: none; background: ${T.pill}; color: ${T.ink}; cursor: pointer;
+          width: 24px; height: 24px; border-radius: 6px; font-size: 17px; line-height: 1;
+        }
+        .lpAdd:hover { background: #242424; }
+        .layersList {
+          display: flex; flex-direction: column; gap: 4px;
+          overflow-y: auto; -webkit-overflow-scrolling: touch; min-height: 0;
+        }
+        .layerRow {
+          display: flex; align-items: center; gap: 6px;
+          background: ${T.pill}; border-radius: 7px; padding: 7px 8px;
+          cursor: pointer; border: 1px solid transparent; transition: background 0.12s;
+        }
+        .layerRow:hover { background: #242424; }
+        .layerRow.on { border-color: ${T.accent}; background: #1b1b1b; }
+        .lpEye, .lpLock {
+          flex-shrink: 0; border: none; background: none; cursor: pointer;
+          color: ${T.inkSoft}; display: flex; align-items: center; padding: 2px;
+        }
+        .lpEye:hover, .lpLock:hover { color: ${T.ink}; }
+        .lpName {
+          flex: 1; min-width: 0; font-family: ${T.mono}; font-size: 11px;
+          color: ${T.ink}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          display: flex; align-items: baseline; gap: 6px;
+        }
+        .lpLockTag { font-size: 8px; font-style: normal; color: ${T.inkSoft};
+          text-transform: uppercase; letter-spacing: 0.08em; }
+        .lpCount { flex-shrink: 0; font-family: ${T.mono}; font-size: 9px; color: ${T.inkSoft}; }
+        .layerActions {
+          display: flex; gap: 4px; padding-top: 8px; margin-top: 6px;
+          border-top: 1px solid ${T.line};
+        }
+        .layerActions button {
+          flex: 1; min-width: 0; border: none; background: ${T.pill}; color: ${T.ink};
+          cursor: pointer; border-radius: 6px; padding: 7px 2px;
+          font-family: ${T.mono}; font-size: 9px; letter-spacing: 0.02em;
+        }
+        .layerActions button:hover { background: #242424; }
+        .layerActions button:disabled { opacity: 0.3; cursor: not-allowed; }
+        .lpHint { font-family: ${T.mono}; font-size: 8.5px; color: ${T.inkSoft};
+          line-height: 1.5; padding: 8px 4px 2px; }
+
+        /* active-layer-not-editable banner (left panel) */
+        .lockNote {
+          background: #1b1b1b; border: 1px solid ${T.accent};
+          border-radius: ${T.radius}px; padding: 8px 10px;
+          font-family: ${T.mono}; font-size: 9px; letter-spacing: 0.04em;
+          color: ${T.ink}; line-height: 1.5;
+        }
         .stageInfo {
           flex-shrink: 0; color: ${T.inkSoft}; font-size: 10px; font-family: ${T.mono};
           text-transform: uppercase; letter-spacing: 0.08em;
@@ -2035,6 +2430,53 @@ function IconSelect() {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="3 3">
       <rect x="3" y="3" width="18" height="18" rx="2" />
+    </svg>
+  )
+}
+function IconLayers() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2l9 5-9 5-9-5 9-5z" />
+      <path d="M3 12l9 5 9-5" />
+      <path d="M3 17l9 5 9-5" />
+    </svg>
+  )
+}
+function IconEye() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  )
+}
+function IconEyeOff() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17.9 17.9A10.6 10.6 0 0112 19C5 19 1 12 1 12a18.5 18.5 0 014.2-5.1m3-1.6A10.6 10.6 0 0112 5c7 0 11 7 11 7a18.5 18.5 0 01-2.2 3.1" />
+      <path d="M9.9 9.9a3 3 0 004.2 4.2" />
+      <path d="M1 1l22 22" />
+    </svg>
+  )
+}
+function IconLock() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="11" width="18" height="11" rx="2" />
+      <path d="M7 11V7a5 5 0 0110 0v4" />
+    </svg>
+  )
+}
+function IconUnlock() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="11" width="18" height="11" rx="2" />
+      <path d="M7 11V7a5 5 0 019.9-1" />
     </svg>
   )
 }
