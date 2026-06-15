@@ -380,6 +380,13 @@ IMPLEMENTED 2026-06-15:
    **single-finger drag pans only** (Procreate-style — no stray marks).
 2. **2-finger pinch = zoom toward gesture midpoint + pan** (replaces nothing on
    desktop: wheel-zoom and space-drag stay).
+2b. **2-finger twist = ROTATE the canvas** (added 2026-06-15), combined with the
+   same pinch — zoom + rotate + pan happen together around the gesture. On
+   lift, the rotation gently snaps to the nearest right angle if within ~7°.
+   The view transform is now `screen = scale·R(rot)·doc + t`; ALL screen↔doc
+   conversions go through `screenToDoc` (App.jsx) so drawing/hit-test stay
+   correct. The status bar shows the angle; **Fit (the % button) resets
+   rotation to 0** — it doubles as "straighten". Verified: scripts/rotatecheck.
 3. **2-finger tap = undo, 3-finger tap = redo.** Undo history = bead edits only
    (one stroke = one step), capped at 50. Small ↶/↷ buttons sit in the zoom
    control for desktop; Ctrl/⌘+Z and Ctrl/⌘+Shift+Z also work.

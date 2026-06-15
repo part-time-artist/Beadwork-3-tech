@@ -63,6 +63,17 @@ function nextTreeName(usedNames) {
   for (let n = 2; ; n++) for (const t of TREE_NAMES) if (!used.has(`${t} ${n}`)) return `${t} ${n}`
 }
 
+// The view transform is: screen = scale · R(rot) · doc + (tx,ty), where R is a
+// rotation. These invert/apply it so every screen↔document conversion (drawing,
+// hit-test, pinch, zoom) stays correct once the canvas can be rotated.
+function screenToDoc(sx, sy, v) {
+  const dx = sx - v.tx
+  const dy = sy - v.ty
+  const c = Math.cos(v.rot || 0)
+  const s = Math.sin(v.rot || 0)
+  return { x: (c * dx + s * dy) / v.scale, y: (-s * dx + c * dy) / v.scale }
+}
+
 // short "last edited" label for the gallery
 function timeAgo(ts) {
   if (!ts) return '—'
@@ -128,8 +139,9 @@ export default function Home() {
     [Bw, Bh, cols, rows, tech]
   )
 
-  // view transform: screen px = doc * scale + t.  viewport = pasteboard size.
-  const [view, setView] = useState({ scale: 1, tx: 0, ty: 0 })
+  // view transform: screen px = scale · R(rot) · doc + t.  rot (radians) lets the
+  // canvas be rotated with a two-finger twist. viewport = pasteboard size.
+  const [view, setView] = useState({ scale: 1, tx: 0, ty: 0, rot: 0 })
   const [viewport, setViewport] = useState({ w: 1, h: 1 })
 
   // ---- design data ----
@@ -424,7 +436,7 @@ export default function Home() {
 
   // resize the image by `factor` keeping the doc point under (sx,sy) fixed
   const imageZoomAt = (factor, sx, sy) => {
-    const m = { x: (sx - view.tx) / view.scale, y: (sy - view.ty) / view.scale }
+    const m = screenToDoc(sx, sy, view)
     setBgT((t) => {
       const ns = clampNum(t.scale * factor, 0.2, 8)
       const ff = ns / t.scale
@@ -782,14 +794,21 @@ export default function Home() {
   const drawScene = useCallback(
     (ctx) => {
       const { w: vw, h: vh } = viewport
-      const { scale, tx, ty } = view
+      const { scale, tx, ty, rot } = view
       const docW = geo.width
       const docH = geo.height
 
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0)
       ctx.clearRect(0, 0, vw, vh)
-      // everything below is in document space (pan + zoom baked into the transform)
-      ctx.setTransform(DPR * scale, 0, 0, DPR * scale, tx * DPR, ty * DPR)
+      // everything below is in document space (pan + zoom + rotation baked into
+      // the transform): screen = scale · R(rot) · doc + t
+      const vcos = Math.cos(rot)
+      const vsin = Math.sin(rot)
+      ctx.setTransform(
+        DPR * scale * vcos, DPR * scale * vsin,
+        -DPR * scale * vsin, DPR * scale * vcos,
+        tx * DPR, ty * DPR
+      )
 
       // document background (a hidden image falls back to the solid colour)
       const imageShowing = bg.type === 'image' && bgShown && bgImgRef.current
@@ -812,11 +831,18 @@ export default function Home() {
         ctx.fillRect(0, 0, docW, docH)
       }
 
-      // visible cell range — cull off-screen beads so ANY document size stays fast
-      const docLeft = -tx / scale
-      const docTop = -ty / scale
-      const docRight = (vw - tx) / scale
-      const docBottom = (vh - ty) / scale
+      // visible cell range — cull off-screen beads so ANY document size stays
+      // fast. Under rotation the visible doc area is a rotated rectangle, so use
+      // the doc-space bounding box of the four viewport corners (a bit larger,
+      // never misses a bead).
+      const vc = [
+        screenToDoc(0, 0, view), screenToDoc(vw, 0, view),
+        screenToDoc(0, vh, view), screenToDoc(vw, vh, view),
+      ]
+      const docLeft = Math.min(vc[0].x, vc[1].x, vc[2].x, vc[3].x)
+      const docRight = Math.max(vc[0].x, vc[1].x, vc[2].x, vc[3].x)
+      const docTop = Math.min(vc[0].y, vc[1].y, vc[2].y, vc[3].y)
+      const docBottom = Math.max(vc[0].y, vc[1].y, vc[2].y, vc[3].y)
       const r0 = Math.max(0, Math.floor((docTop - geo.padY) / geo.Py) - 1)
       const r1 = Math.min(rows, Math.ceil((docBottom - geo.padY) / geo.Py) + 1)
       const c0 = Math.max(0, Math.floor((docLeft - geo.padX - geo.rowOffset) / geo.Px) - 1)
@@ -959,7 +985,8 @@ export default function Home() {
     if (vw < 2 || vh < 2) return
     const margin = 48
     const scale = Math.min((vw - margin) / geo.width, (vh - margin) / geo.height, 4)
-    setView({ scale, tx: (vw - geo.width * scale) / 2, ty: (vh - geo.height * scale) / 2 })
+    // fit also straightens the canvas (rot 0), so it doubles as "reset rotation"
+    setView({ scale, tx: (vw - geo.width * scale) / 2, ty: (vh - geo.height * scale) / 2, rot: 0 })
   }, [viewport, geo.width, geo.height])
 
   // auto-fit on first sizing, and whenever the canvas cm size changes
@@ -978,9 +1005,13 @@ export default function Home() {
   const zoomAt = useCallback((factor, sx, sy) => {
     setView((v) => {
       const ns = clampNum(+(v.scale * factor).toFixed(4), 0.02, 8)
-      const docx = (sx - v.tx) / v.scale
-      const docy = (sy - v.ty) / v.scale
-      return { scale: ns, tx: sx - docx * ns, ty: sy - docy * ns }
+      // keep the doc point under (sx,sy) fixed, accounting for rotation
+      const d = screenToDoc(sx, sy, v)
+      const c = Math.cos(v.rot || 0)
+      const s = Math.sin(v.rot || 0)
+      const rx = c * d.x - s * d.y
+      const ry = s * d.x + c * d.y
+      return { ...v, scale: ns, tx: sx - ns * rx, ty: sy - ns * ry }
     })
   }, [])
 
@@ -1054,15 +1085,13 @@ export default function Home() {
       dist: Math.hypot(b.x - a.x, b.y - a.y) || 1,
       mx: (a.x + b.x) / 2,
       my: (a.y + b.y) / 2,
+      ang: Math.atan2(b.y - a.y, b.x - a.x),
     }
   }
 
   const docFromEvent = (e) => {
     const rect = canvasRef.current.getBoundingClientRect()
-    return {
-      x: (e.clientX - rect.left - view.tx) / view.scale,
-      y: (e.clientY - rect.top - view.ty) / view.scale,
-    }
+    return screenToDoc(e.clientX - rect.left, e.clientY - rect.top, view)
   }
 
   // ---- straight-line snapping --------------------------------------------
@@ -1212,17 +1241,19 @@ export default function Home() {
         tapRef.current.moved = true
       }
       if (pinchRef.current && touchPts.current.size === 2) {
-        // pinch: zoom by the distance ratio around the midpoint, pan by the
-        // midpoint drift — the doc point between the fingers stays pinched.
+        // pinch: zoom by the distance ratio, ROTATE by the twist of the two
+        // fingers, and pan by the midpoint drift — the doc point between the
+        // fingers stays pinched under all three.
         const [a, b] = [...touchPts.current.values()]
         const dist = Math.hypot(b.x - a.x, b.y - a.y) || 1
         const mx = (a.x + b.x) / 2
         const my = (a.y + b.y) / 2
+        const ang = Math.atan2(b.y - a.y, b.x - a.x)
         const g = pinchRef.current
         if (bgAdjust) {
           // image-adjust mode: the pinch resizes/moves the background image
-          const mPrev = { x: (g.mx - view.tx) / view.scale, y: (g.my - view.ty) / view.scale }
-          const mNow = { x: (mx - view.tx) / view.scale, y: (my - view.ty) / view.scale }
+          const mPrev = screenToDoc(g.mx, g.my, view)
+          const mNow = screenToDoc(mx, my, view)
           setBgT((t) => {
             const ns = clampNum(t.scale * (dist / g.dist), 0.2, 8)
             const ff = ns / t.scale
@@ -1237,11 +1268,17 @@ export default function Home() {
         } else {
           setView((v) => {
             const ns = clampNum(v.scale * (dist / g.dist), 0.02, 8)
-            const k = ns / v.scale
-            return { scale: ns, tx: mx - (g.mx - v.tx) * k, ty: my - (g.my - v.ty) * k }
+            const nrot = (v.rot || 0) + (ang - g.ang) // snap happens on lift, not per-frame
+            // keep the doc point under the old midpoint pinned to the new one
+            const d = screenToDoc(g.mx, g.my, v)
+            const c = Math.cos(nrot)
+            const s = Math.sin(nrot)
+            const rx = c * d.x - s * d.y
+            const ry = s * d.x + c * d.y
+            return { scale: ns, rot: nrot, tx: mx - ns * rx, ty: my - ns * ry }
           })
         }
-        pinchRef.current = { dist, mx, my }
+        pinchRef.current = { dist, mx, my, ang }
         return
       }
       // single finger falls through to the shared pan block
@@ -1251,8 +1288,13 @@ export default function Home() {
       const dy = e.clientY - panning.current.y
       panning.current = { x: e.clientX, y: e.clientY }
       if (bgAdjust && bg.type === 'image') {
-        // image-adjust mode: dragging moves the image, not the view
-        setBgT((t) => ({ ...t, x: t.x + dx / view.scale, y: t.y + dy / view.scale }))
+        // image-adjust mode: dragging moves the image, not the view (rotate the
+        // screen delta into doc space so it follows the finger under rotation)
+        const c = Math.cos(view.rot || 0)
+        const s = Math.sin(view.rot || 0)
+        const ddx = (c * dx + s * dy) / view.scale
+        const ddy = (-s * dx + c * dy) / view.scale
+        setBgT((t) => ({ ...t, x: t.x + ddx, y: t.y + ddy }))
       } else {
         setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }))
       }
@@ -1296,8 +1338,25 @@ export default function Home() {
     placeDrag.current = null
   }
 
+  // When a two-finger gesture ends, gently snap the rotation to the nearest
+  // right angle if it's close (≈7°), so getting back to upright/sideways is
+  // easy. Pivots around the viewport centre so the canvas doesn't jump.
+  const snapRotation = () => setView((v) => {
+    const step = Math.PI / 2
+    const snapped = Math.round((v.rot || 0) / step) * step
+    if (Math.abs((v.rot || 0) - snapped) >= 0.12) return v
+    const px = viewport.w / 2
+    const py = viewport.h / 2
+    const d = screenToDoc(px, py, v)
+    const c = Math.cos(snapped)
+    const s = Math.sin(snapped)
+    return { ...v, rot: snapped, tx: px - v.scale * (c * d.x - s * d.y), ty: py - v.scale * (s * d.x + c * d.y) }
+  })
+
   const liftTouch = (e, { allowTap }) => {
+    const wasPinch = touchPts.current.size === 2 && !!pinchRef.current
     touchPts.current.delete(e.pointerId)
+    if (wasPinch) snapRotation()
     if (touchPts.current.size === 0) {
       const t = tapRef.current
       tapRef.current = null
@@ -1375,8 +1434,7 @@ export default function Home() {
       e.clientX >= rect.left && e.clientX <= rect.right &&
       e.clientY >= rect.top && e.clientY <= rect.bottom
     ) {
-      const x = (e.clientX - rect.left - view.tx) / view.scale
-      const y = (e.clientY - rect.top - view.ty) / view.scale
+      const { x, y } = screenToDoc(e.clientX - rect.left, e.clientY - rect.top, view)
       pushRecent(d.color)
       floodFill(tech.nearestBead(geo, x, y), d.color)
     }
@@ -2100,6 +2158,7 @@ export default function Home() {
         </div>
         <div className="stageInfo">
           {cols} × {rows} BEADS · {canvasCm.w}×{canvasCm.h} CM · BEAD {beadMM.w}×{beadMM.h} MM · {Math.round(view.scale * 100)}%
+          {view.rot ? ` · ${(((Math.round(view.rot * 180 / Math.PI) % 360) + 360) % 360)}°` : ''}
         </div>
       </main>
 

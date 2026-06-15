@@ -164,7 +164,7 @@ Every press/move/release arrives as a **pointer event** carrying a `pointerType`
 
 - **Pencil or mouse** → the active tool: paint, erase, or drag a marquee. Space-drag / middle-mouse still pans on desktop.
 - **One finger** → pan only. Fingers can never paint, so a resting finger can't leave stray marks.
-- **Two fingers** → pinch: zoom toward the midpoint between the fingers and pan with their drift. The math keeps the *document point between your fingers* pinned under them: each move computes `new distance ÷ old distance` (the zoom factor) and reuses the same camera formula as wheel-zoom.
+- **Two fingers** → pinch *and twist*: zoom toward the midpoint, **rotate** the canvas by the angle your fingers turn through, and pan with their drift — all at once. The math keeps the *document point between your fingers* pinned under them. Because the canvas can now be rotated, the camera formula gained a rotation: `screen = scale × rotate(angle) × document + offset`, and every "where on the design is this finger?" calculation goes through one helper, `screenToDoc`. Lift your fingers near a quarter-turn and it **snaps to the right angle**; the **% button (Fit)** resets rotation to 0, so it doubles as "straighten". The current angle shows in the bottom status bar.
 - **Quick 2-finger tap** → undo. **3-finger tap** → redo. A "tap" = all fingers up within 350 ms, having moved less than 12 px. The code tracks every active finger in a Map (`touchPts`, pointerId → position) and remembers the *maximum* finger count of the gesture.
 
 `docFromEvent` converts a screen position into document coordinates by undoing the camera — the inverse of the drawing transform. While a pencil stroke is live, incoming finger touches are ignored (palm protection), and Safari's own `gesturestart/change/end` page-zoom events are blocked so only the canvas camera zooms, never the page.
@@ -402,6 +402,7 @@ there when you reopen — it used to vanish.
 - Undo history depth → `HISTORY_MAX` in `App.jsx` (default 50)
 - Multi-finger tap feel → the `350` ms / `12` px thresholds in `onPointerMove`/`liftTouch`, `App.jsx`
 - Zoom limits → the `0.02, 8` clamps in `zoomAt` and the pinch handler
+- Rotation snap angle → the `0.12` (radians ≈ 7°) in `snapRotation`, `App.jsx`
 - Layer compositing (who wins on overlap) → `fillAt` in `drawScene`, `App.jsx`
 - What export includes → `flattenVisible` in `App.jsx`
 - New-layer name / where it inserts → `addLayer` in `App.jsx`
