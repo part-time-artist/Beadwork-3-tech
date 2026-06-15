@@ -1,12 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import {
-  makeGeometry,
-  beadCountFromCm,
-  beadAt,
-  nearestBead,
-  beadPath,
-  beadExists,
-} from './lib/geometry'
+import { getTechnique, DEFAULT_TECHNIQUE, TECHNIQUES } from './techniques'
 import { renderFullChart, renderLegend, rasterScale } from './lib/chart'
 
 // ---- design tokens: "Nothing" design language (see .claude/skills/nothing-design).
@@ -58,6 +51,17 @@ const HISTORY_MAX = 50 // undo steps (one stroke / fill / selection op = one ste
 const PACKED_DRAW = 1.2
 
 export default function Home() {
+  // ---- technique ----
+  // One artwork = one technique, FIXED for that artwork (no mid-artwork
+  // switching — changing technique starts a new artwork). The technique supplies
+  // the grid (the only thing that differs); everything else is shared. Chosen
+  // up front via the chooser popup; saved designs carry the choice.
+  const [techniqueId, setTechniqueId] = useState(DEFAULT_TECHNIQUE)
+  const tech = useMemo(() => getTechnique(techniqueId), [techniqueId])
+  // chooser popup: 'start' on first load (forces a choice), 'new' from the New
+  // artwork button (cancellable), or null when closed.
+  const [chooser, setChooser] = useState(null)
+
   // ---- physical model ----
   // Two fixed bead sizes, both 4:5 ratio (width:height). Stated size = bead width.
   const [beadMM, setBeadMM] = useState({ w: 1.5, h: 1.875 }) // 1.5 mm default
@@ -66,13 +70,13 @@ export default function Home() {
   // derived bead/row counts from the physical sizes (same packing as screen)
   const { cols, rows } = useMemo(
     () =>
-      beadCountFromCm({
+      tech.beadCountFromCm({
         canvasWcm: canvasCm.w,
         canvasHcm: canvasCm.h,
         beadWmm: beadMM.w,
         beadHmm: beadMM.h,
       }),
-    [canvasCm, beadMM]
+    [canvasCm, beadMM, tech]
   )
 
   // ---- rendering size ----
@@ -85,8 +89,8 @@ export default function Home() {
   const Bh = beadMM.h * SCREEN_PXMM
 
   const geo = useMemo(
-    () => makeGeometry({ Bw, Bh, cols, rows }),
-    [Bw, Bh, cols, rows]
+    () => tech.makeGeometry({ Bw, Bh, cols, rows }),
+    [Bw, Bh, cols, rows, tech]
   )
 
   // view transform: screen px = doc * scale + t.  viewport = pasteboard size.
@@ -362,19 +366,11 @@ export default function Home() {
   const canEdit = !!activeLayer && activeLayer.visible && !activeLayer.locked
   canEditRef.current = canEdit
 
-  // Per-cell tilt (radians). Apex (even) rows lie HORIZONTAL (rotated 90°).
-  // Tilted (odd) rows: neighbouring beads MIRROR each other (+45/−45 along the
-  // row) and the pattern flips row to row, so alternate beads down each column
-  // mirror too — a checkerboard of mirrored pairs (assets/rows explaination.png
-  // + user corrections 2026-06-10).
+  // Per-cell tilt (radians) — defined by the technique (3-bead woven tilt /
+  // 1-bead upright). See each module's tiltFor.
   const tiltFor = useCallback(
-    (col, row) => {
-      if (orient !== 'woven') return 0
-      if (row % 2 === 0) return Math.PI / 2 // apex rows: horizontal
-      const A = Math.PI / 4 // ±45°
-      return ((row + 1) / 2 + col) % 2 === 1 ? -A : A
-    },
-    [orient]
+    (col, row) => tech.tiltFor(col, row, orient),
+    [orient, tech]
   )
 
   // ---- background ----
@@ -446,28 +442,20 @@ export default function Home() {
         while (stack.length) {
           const { col, row } = stack.pop()
           if (col < 0 || col >= cols || row < 0 || row >= rows) continue
-          if (!beadExists(col, row)) continue // skip empty apex nodes
+          if (!tech.beadExists(col, row)) continue // skip empty apex nodes
           const k = key(col, row)
           if (seen.has(k)) continue
           seen.add(k)
           const cur = prev.get(k) || null
           if (cur !== target) continue // boundary: stop at differently-colored beads
           next.set(k, useColor)
-          // staggered neighbours: left/right same row + the 4 nestled diagonals
-          const odd = row % 2
-          const diagL = odd ? col : col - 1
-          const diagR = odd ? col + 1 : col
-          stack.push({ col: col - 1, row })
-          stack.push({ col: col + 1, row })
-          stack.push({ col: diagL, row: row - 1 })
-          stack.push({ col: diagR, row: row - 1 })
-          stack.push({ col: diagL, row: row + 1 })
-          stack.push({ col: diagR, row: row + 1 })
+          // technique-defined neighbours (3-bead staggered / 1-bead orthogonal)
+          for (const n of tech.floodNeighbors(col, row)) stack.push(n)
         }
         return next
       })
     },
-    [color, cols, rows, commit]
+    [color, cols, rows, commit, tech]
   )
 
   // beads covered by the brush at doc point (x,y): the bead under the cursor for
@@ -475,7 +463,7 @@ export default function Home() {
   const brushCells = useCallback(
     (x, y) => {
       if (brush <= 1) {
-        const n = beadAt(geo, x, y)
+        const n = tech.beadAt(geo, x, y)
         return n ? [n] : []
       }
       const out = []
@@ -487,7 +475,7 @@ export default function Home() {
         if (row < 0 || row >= rows) continue
         for (let col = approxCol - span; col <= approxCol + span; col++) {
           if (col < 0 || col >= cols) continue
-          if (!beadExists(col, row)) continue
+          if (!tech.beadExists(col, row)) continue
           const { cx, cy } = geo.centerFor(col, row)
           const dx = x - cx
           const dy = y - cy
@@ -496,7 +484,7 @@ export default function Home() {
       }
       return out
     },
-    [brush, geo, Bw, rows, cols]
+    [brush, geo, Bw, rows, cols, tech]
   )
 
   const paintBrush = useCallback(
@@ -535,7 +523,7 @@ export default function Home() {
       const c1 = Math.min(cols, Math.ceil((x1 - geo.padX) / geo.Px) + 1)
       for (let row = r0; row < r1; row++) {
         for (let col = c0; col < c1; col++) {
-          if (!beadExists(col, row)) continue
+          if (!tech.beadExists(col, row)) continue
           const k = key(col, row)
           if (!beads.has(k)) continue // only coloured beads are selectable
           const { cx, cy } = geo.centerFor(col, row)
@@ -544,7 +532,7 @@ export default function Home() {
       }
       setSelection(sel)
     },
-    [geo, rows, cols, beads]
+    [geo, rows, cols, beads, tech]
   )
 
   const clearSelection = () => setSelection(new Set())
@@ -580,19 +568,10 @@ export default function Home() {
   const [placing, setPlacing] = useState(null)
   const placeDrag = useRef(null) // grab offset between pointer and ghost origin
 
-  // The weave lattice is not uniform (apex rows are half-density and tilts
-  // checkerboard), so a copy can only land on origins where every motif bead
-  // still exists: row shift even, and column shift parity matching half the
-  // row shift — same parity rule the pattern maker keeps (its comment above).
-  const snapPlace = (x, y, pl) => {
-    let r = Math.round((y - geo.padY) / geo.Py)
-    if ((((r - pl.baseR) % 2) + 2) % 2 === 1) r += (y - geo.padY) / geo.Py > r ? 1 : -1
-    const off = (r % 2) * geo.rowOffset
-    let c = Math.round((x - geo.padX - off) / geo.Px)
-    const dHalf = ((((r - pl.baseR) / 2) % 2) + 2) % 2
-    if (((c - pl.baseC + dHalf) % 2 + 2) % 2 === 1) c += (x - geo.padX - off) / geo.Px > c ? 1 : -1
-    return { c, r }
-  }
+  // Snap a dragged copy's origin to a valid cell. The 3-bead weave constrains
+  // this to parity-valid origins (half-density + tilt checkerboard); the 1-bead
+  // grid accepts any cell. The rule lives in the technique.
+  const snapPlace = (x, y, pl) => tech.snapPlace(geo, x, y, pl)
 
   const startPlacing = (mode) => {
     if (!selection.size || !canEdit) return
@@ -608,20 +587,20 @@ export default function Home() {
       if (r < minR) minR = r
     }
     if (!cells.length) return
-    // even-snapped origin, like the pattern maker, so dc/dr keep cell parity
-    minC -= minC % 2
-    minR -= minR % 2
+    // technique origin snap (3-bead even-snaps for parity; 1-bead is identity)
+    ;({ minC, minR } = tech.snapMotifOrigin(minC, minR))
     const motif = cells.map(({ c, r, fill }) => ({ dc: c - minC, dr: r - minR, fill }))
+    const { dc: offC, dr: offR } = tech.copyStartOffset
     setPlacing({
       mode,
       motif,
       baseC: minC,
       baseR: minR,
-      // a copy starts just below-right of the original (+1 col +2 rows is a
-      // parity-valid offset) so the user can see it's a separate copy; a move
-      // starts in place — the originals fade where they are
-      c: mode === 'move' ? minC : minC + 1,
-      r: mode === 'move' ? minR : minR + 2,
+      // a copy starts nudged off the original (a technique-valid offset) so the
+      // user can see it's a separate copy; a move starts in place — the
+      // originals fade where they are
+      c: mode === 'move' ? minC : minC + offC,
+      r: mode === 'move' ? minR : minR + offR,
       // a move hides the originals while in flight; nothing is deleted until
       // Place, so Cancel simply unhides them
       hide: mode === 'move' ? new Set(cells.map(({ c, r }) => key(c, r))) : null,
@@ -641,7 +620,7 @@ export default function Home() {
       for (const { dc, dr, fill } of placing.motif) {
         const c = placing.c + dc
         const r = placing.r + dr
-        if (c < 0 || c >= cols || r < 0 || r >= rows || !beadExists(c, r)) continue
+        if (c < 0 || c >= cols || r < 0 || r >= rows || !tech.beadExists(c, r)) continue
         const k = key(c, r)
         sel.add(k)
         if ((next || prev).get(k) !== fill) ensure().set(k, fill)
@@ -686,19 +665,15 @@ export default function Home() {
       if (r > maxR) maxR = r
     }
     if (!cells.length) return
-    minC -= minC % 2
-    minR -= minR % 2
+    ;({ minC, minR } = tech.snapMotifOrigin(minC, minR))
     const motif = cells.map(({ c, r, fill }) => ({ dc: c - minC, dr: r - minR, fill }))
-    // tile pitch = motif size + gap, rounded UP to even (parity rule above)
-    const evenUp = (n) => n + (n % 2)
-    const px = evenUp(maxC - minC + 1 + patternGap)
-    const py = evenUp(maxR - minR + 1 + patternGap)
-    // the brick / half-drop shift: half a tile, snapped to even — but never 0,
+    // tile pitch = motif size + gap, snapped by the technique (3-bead rounds UP
+    // to even for weave parity; 1-bead keeps the exact size)
+    const px = tech.evenUp(maxC - minC + 1 + patternGap)
+    const py = tech.evenUp(maxR - minR + 1 + patternGap)
+    // the brick / half-drop shift: half a tile (technique-snapped) — never 0,
     // or a small motif would degrade brick / half-drop into a plain grid
-    const half = (n) => {
-      const s = Math.floor(n / 2)
-      return Math.max(2, s - (s % 2))
-    }
+    const half = tech.patternHalf
     const next = new Map(base)
     // tile indices covering the grid (one extra column for the brick shift)
     const i0 = -Math.ceil(minC / px) - 1
@@ -716,7 +691,7 @@ export default function Home() {
         for (const { dc, dr, fill } of motif) {
           const c = oc + dc
           const r = or + dr
-          if (c < 0 || c >= cols || r < 0 || r >= rows || !beadExists(c, r)) continue
+          if (c < 0 || c >= cols || r < 0 || r >= rows || !tech.beadExists(c, r)) continue
           next.set(key(c, r), fill)
         }
       }
@@ -851,7 +826,7 @@ export default function Home() {
       }
       for (let row = r0; row < r1; row++) {
         for (let col = c0; col < c1; col++) {
-          if (!beadExists(col, row)) continue
+          if (!tech.beadExists(col, row)) continue
           const { cx, cy } = geo.centerFor(col, row)
           const k = key(col, row)
           const fill = fillAt(k)
@@ -864,11 +839,11 @@ export default function Home() {
           }
           const tilt = tiltFor(col, row)
           if (fill) {
-            beadPath(ctx, cx, cy, dw, dh, tilt)
+            tech.beadPath(ctx, cx, cy, dw, dh, tilt)
             ctx.fillStyle = fill
             ctx.fill()
           } else if (drawOutlines) {
-            beadPath(ctx, cx, cy, Bw, Bh, tilt)
+            tech.beadPath(ctx, cx, cy, Bw, Bh, tilt)
             // over a visible reference image, empty beads are outline-only so
             // the design underneath stays visible; otherwise a very slight grey
             if (!imageShowing) {
@@ -886,9 +861,9 @@ export default function Home() {
         ctx.strokeStyle = T.accent
         for (let row = r0; row < r1; row++) {
           for (let col = c0; col < c1; col++) {
-            if (!beadExists(col, row) || !selection.has(key(col, row))) continue
+            if (!tech.beadExists(col, row) || !selection.has(key(col, row))) continue
             const { cx, cy } = geo.centerFor(col, row)
-            beadPath(ctx, cx, cy, dw * 1.08, dh * 1.08, tiltFor(col, row))
+            tech.beadPath(ctx, cx, cy, dw * 1.08, dh * 1.08, tiltFor(col, row))
             ctx.stroke()
           }
         }
@@ -915,16 +890,16 @@ export default function Home() {
         for (const { dc, dr, fill } of placing.motif) {
           const c = placing.c + dc
           const r = placing.r + dr
-          if (c < 0 || c >= cols || r < 0 || r >= rows || !beadExists(c, r)) continue
+          if (c < 0 || c >= cols || r < 0 || r >= rows || !tech.beadExists(c, r)) continue
           const { cx, cy } = geo.centerFor(c, r)
-          beadPath(ctx, cx, cy, dw, dh, tiltFor(c, r))
+          tech.beadPath(ctx, cx, cy, dw, dh, tiltFor(c, r))
           ctx.fillStyle = fill
           ctx.fill()
         }
         ctx.globalAlpha = 1
       }
     },
-    [viewport, view, geo, beads, layers, activeId, bg, bgT, bgShown, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing]
+    [viewport, view, geo, beads, layers, activeId, bg, bgT, bgShown, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing, tech]
   )
   drawRef.current = drawScene // the rAF repaint path always uses the latest
 
@@ -1065,15 +1040,8 @@ export default function Home() {
   const SNAP_BEADS = 3
   const strokeRef = useRef(null) // { start, pts, locked, snapped } per stroke
 
-  const snapAxes = () => {
-    // unit vectors of the lattice's straight lines + their bead pitch
-    const dl = Math.hypot(geo.Px / 2, geo.Py)
-    return [
-      { ux: 1, uy: 0, pitch: geo.Px }, // along a row
-      { ux: geo.Px / 2 / dl, uy: geo.Py / dl, pitch: dl }, // diagonal ↘
-      { ux: -(geo.Px / 2) / dl, uy: geo.Py / dl, pitch: dl }, // diagonal ↙
-    ]
-  }
+  // unit vectors of the technique's straight lattice lines + their bead pitch
+  const snapAxes = () => tech.snapAxes(geo)
 
   // Does the whole stroke so far fit a lattice axis? Returns the best axis
   // (longest projection) or null. Every recorded point must stay within one
@@ -1376,7 +1344,7 @@ export default function Home() {
       const x = (e.clientX - rect.left - view.tx) / view.scale
       const y = (e.clientY - rect.top - view.ty) / view.scale
       pushRecent(d.color)
-      floodFill(nearestBead(geo, x, y), d.color)
+      floodFill(tech.nearestBead(geo, x, y), d.color)
     }
   }
   const onSwatchCancel = () => {
@@ -1434,6 +1402,7 @@ export default function Home() {
       cols,
       rows,
       tiltFor,
+      tech,
       printBeadMm,
       beadRatio,
       background: chartBackground(),
@@ -1478,7 +1447,7 @@ export default function Home() {
   // one design = one plain object: this is what every save path (quick-save,
   // named slot, exported file) writes and what applyDesign reads back
   const designData = () => ({
-    version: 2, name: designName, canvasCm, beadMM, palette, bg, bgT, bgShown, pack,
+    version: 2, name: designName, technique: techniqueId, canvasCm, beadMM, palette, bg, bgT, bgShown, pack,
     layers: layersRef.current.map((l) => ({
       name: l.name, visible: l.visible, locked: l.locked, beads: [...l.beads.entries()],
     })),
@@ -1491,6 +1460,9 @@ export default function Home() {
   const applyDesign = (d, { undoable = false } = {}) => {
     if (!d || typeof d !== 'object' || (!Array.isArray(d.beads) && !Array.isArray(d.layers)))
       return false
+    // technique tag: older saves predate it and were all 3-bead (getTechnique
+    // falls back to 3-bead for a missing/unknown id)
+    setTechniqueId(getTechnique(d.technique).id)
     if (d.canvasCm) setCanvasCm(d.canvasCm)
     // snap to the nearest offered size (older saves may hold removed sizes)
     if (d.beadMM) {
@@ -1541,6 +1513,28 @@ export default function Home() {
     setSelection(new Set())
     setPlacing(null)
     return true
+  }
+
+  // Start a fresh artwork in the chosen technique. The technique is locked for
+  // the artwork's life, so switching = a blank canvas (the design data, history
+  // and selection are reset). Canvas size, bead size and palette carry over.
+  const newArtwork = (id) => {
+    setTechniqueId(getTechnique(id).id)
+    const l = makeLayer('Layer 1')
+    layersRef.current = [l]
+    activeIdRef.current = l.id
+    beadsRef.current = l.beads
+    patternBaseRef.current = null
+    undoStack.current = []
+    redoStack.current = []
+    setLayers([l])
+    setActiveId(l.id)
+    setBeads(l.beads)
+    setSelection(new Set())
+    setPlacing(null)
+    setDesignName('')
+    setSavedAt(null)
+    setChooser(null)
   }
 
   const saveArtwork = () => {
@@ -1599,17 +1593,21 @@ export default function Home() {
     }
   }
 
-  // restore the last saved artwork + the named-design list on load
+  // restore the last saved artwork + the named-design list on load. With no
+  // saved artwork (first-ever visit) the technique chooser opens to force a
+  // choice before drawing — one artwork = one technique, picked up front.
   useEffect(() => {
+    let restored = false
     try {
       const raw = localStorage.getItem(DESIGN_KEY)
-      if (raw) applyDesign(JSON.parse(raw))
+      if (raw) restored = applyDesign(JSON.parse(raw))
     } catch (e) {}
     try {
       const raw = localStorage.getItem(DESIGNS_KEY)
       const list = raw && JSON.parse(raw)
       if (Array.isArray(list)) setSavedDesigns(list)
     } catch (e) {}
+    if (!restored) setChooser('start')
   }, [])
 
   // ---- UI ----
@@ -1620,7 +1618,7 @@ export default function Home() {
       <aside className="panel left">
         <div className="panelScroll">
         <div className="brand">BEADWORK<span className="dot" /></div>
-        <div className="sub">3-BEAD TECHNIQUE</div>
+        <div className="sub">{tech.subtitle}</div>
 
         {!canEdit && (
           <div className="lockNote">
@@ -2015,6 +2013,10 @@ export default function Home() {
         {/* My designs — named slots in this browser + a file for moving devices */}
         <div className="card">
           <div className="cardTitle">My designs</div>
+          <div className="techRow">
+            <span className="techNow">{tech.label}</span>
+            <button className="ghost newArt" onClick={() => setChooser('new')}>+ New artwork</button>
+          </div>
           <div className="pillRow">
             <Pill value={designName} label="name" text onChange={setDesignName} />
             <button className="ghost" onClick={saveDesignAs}>Save</button>
@@ -2100,6 +2102,40 @@ export default function Home() {
           className="dragGhost"
           style={{ left: dragGhost.x, top: dragGhost.y, background: dragGhost.color }}
         />
+      )}
+
+      {/* technique chooser — at first start (forced) or via New artwork. The
+          choice is fixed for the artwork's life. */}
+      {chooser && (
+        <div className="modalScrim">
+          <div className="modal">
+            <div className="modalTitle">CHOOSE A TECHNIQUE</div>
+            <div className="modalSub">
+              {chooser === 'new'
+                ? 'Starts a fresh, blank artwork. The technique is fixed once chosen — switching later means starting again.'
+                : 'Pick the weave this artwork is for. The technique is fixed for this artwork; changing it later starts a new one.'}
+            </div>
+            <div className="techGrid">
+              {TECHNIQUES.map((t) => (
+                <button
+                  key={t.id}
+                  className={`techCard ${t.id === techniqueId ? 'on' : ''}`}
+                  onClick={() => newArtwork(t.id)}
+                >
+                  <span className="techName">{t.label}</span>
+                  <span className="techDesc">
+                    {t.id === '3bead'
+                      ? 'Kutch 3-bead weave — staggered, tilted beads.'
+                      : 'Loom / square-stitch — straight aligned grid.'}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {chooser === 'new' && (
+              <button className="ghost" onClick={() => setChooser(null)}>Cancel</button>
+            )}
+          </div>
+        </div>
       )}
 
       <style jsx global>{`
@@ -2399,6 +2435,46 @@ export default function Home() {
           transition: opacity 0.12s;
         }
         .primary:hover { opacity: 0.88; }
+
+        /* current technique + New artwork */
+        .techRow { display: flex; align-items: center; gap: 8px; }
+        .techNow { flex: 1; min-width: 0; font-family: ${T.mono}; font-size: 10px;
+          color: ${T.ink}; text-transform: uppercase; letter-spacing: 0.06em;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .newArt { flex-shrink: 0; width: auto; padding: 8px 12px; font-size: 11px; }
+
+        /* technique chooser modal */
+        .modalScrim {
+          position: fixed; inset: 0; z-index: 60; display: flex;
+          align-items: center; justify-content: center; padding: 24px;
+          background: rgba(0,0,0,0.72);
+          background-image: radial-gradient(${T.line} 1px, transparent 1px);
+          background-size: 16px 16px;
+        }
+        .modal {
+          width: 100%; max-width: 460px; display: flex; flex-direction: column; gap: 14px;
+          background: ${T.panelSolid}; border: 1px solid ${T.line};
+          border-radius: ${T.radius}px; padding: 22px;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+        }
+        .modalTitle { font-family: ${T.mono}; font-size: 12px; font-weight: 700;
+          letter-spacing: 0.14em; color: ${T.ink};
+          display: flex; align-items: center; gap: 8px; }
+        .modalTitle::after { content: ''; width: 7px; height: 7px; border-radius: 50%;
+          background: ${T.accent}; }
+        .modalSub { font-family: ${T.mono}; font-size: 10px; line-height: 1.6;
+          color: ${T.inkSoft}; }
+        .techGrid { display: flex; gap: 12px; flex-wrap: wrap; }
+        .techCard {
+          flex: 1; min-width: 160px; text-align: left; cursor: pointer;
+          display: flex; flex-direction: column; gap: 7px;
+          background: ${T.pill}; border: 1px solid ${T.line};
+          border-radius: 10px; padding: 16px; transition: all 0.12s;
+        }
+        .techCard:hover { background: #1d1d1d; border-color: ${T.inkSoft}; }
+        .techCard.on { border-color: ${T.accent}; }
+        .techName { font-size: 14px; font-weight: 700; color: ${T.ink}; }
+        .techDesc { font-family: ${T.mono}; font-size: 10px; line-height: 1.5; color: ${T.inkSoft}; }
       `}</style>
     </div>
   )

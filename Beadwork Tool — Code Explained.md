@@ -20,6 +20,7 @@ The app is a single web page. There is no server, no database — everything run
 | `src/App.jsx` | **The whole app**: every button, the canvas, all behaviour |
 | `src/lib/geometry.js` | **All the bead-grid math** — pure, no UI |
 | `src/lib/chart.js` | Draws the **printable chart** the artisan reads at the loom |
+| `src/techniques/` | **One file per weave** (3-bead, 1-bead) — picks the grid rules |
 
 That's the whole app — four files. The leftover folders from the open-source
 project this was forked from (`components/`, `parts/`, `static/`, plus an
@@ -279,11 +280,73 @@ bead count, and Dup / Merge↓ / move / Del actions.
 
 ---
 
+## 6.5 The two techniques (1-bead & 3-bead)
+
+The tool started as a 3-bead-weave editor. As of 2026-06-15 it also does the
+**1-bead** weave (the loom / square-stitch look). The clever part: **the only
+real difference between the two is the grid.** Drawing, erasing, filling,
+layers, palettes, saving, exporting — all identical. So instead of building a
+second app, we made the grid *swappable*.
+
+> [!info] What "technique" means here
+> A **technique** is one weave's set of grid rules, bundled into one file. The
+> app keeps one technique "active" at a time and asks it the grid questions —
+> "where does bead (col,row) sit?", "does a bead exist here?", "which neighbours
+> does a flood-fill spread to?" — instead of hard-coding the 3-bead answers.
+
+### The files
+
+```
+src/techniques/
+  index.js       — the list of techniques + a getTechnique(id) lookup
+  threeBead.js   — the Kutch 3-bead weave (staggered, tilted, half-density)
+  oneBead.js     — the 1-bead loom grid (straight, upright, every cell filled)
+```
+
+Each technique file is a plain object that answers the same set of questions.
+The two that matter most:
+
+| The grid question | 3-bead answer | 1-bead answer |
+|---|---|---|
+| Stagger rows like bricks? | yes (odd rows shift half a bead) | no (straight columns) |
+| Does every cell hold a bead? | no — apex rows are half-empty | yes — full density |
+| Tilt the beads? | yes — the woven lean | no — upright |
+| Flood-fill spreads to… | 6 nestled neighbours | 4 up/down/left/right |
+| Bead shape | soft oval | boxier (loom bead) |
+
+`App.jsx` and `chart.js` never mention "3-bead" anymore — they ask the **active
+technique** (`tech.beadExists(...)`, `tech.beadPath(...)`, and so on). Swap the
+technique and the whole grid changes with it.
+
+> [!tip] Why measure, not guess, the 1-bead spacing?
+> The 1-bead grid's spacing (`PACK_X` 1.235, `PACK_Y` 1.273 in `oneBead.js`)
+> came from a real reference image (`assets/beadwork 1 grid.png`) measured by
+> `scripts/measure1grid.mjs` — the script finds the beads in the picture and
+> reads their spacing. The spec's rule: *measure against a real reference, never
+> assume.*
+
+### One artwork = one technique
+
+When you open the tool with no saved work, a **chooser popup** asks which weave
+you're designing for. That choice is **fixed** for that artwork — there's no
+"switch weave" button mid-design, because changing the grid under an existing
+design would scramble it. To change technique you start fresh: the **"New
+artwork"** button (in *My designs*) reopens the chooser and blanks the canvas.
+
+Every saved design records its technique (a `technique` tag in the saved data),
+so reopening it — whether from auto-restore, your *My designs* list, or an
+imported file — brings back the matching grid automatically. Old designs saved
+before this feature have no tag, so they're treated as 3-bead (which they were).
+
+---
+
 ## 7. Where to make common changes
 
-- Weave spacing looks off → `PACK_X` / `PACK_Y` in `geometry.js`
-- Bead shape too round/boxy → exponent `n = 2.4` in `UNIT_BEAD`
-- Lean angle of base beads → `Math.PI / 4` (45°) in `tiltFor`, `App.jsx`
+- 3-bead weave spacing looks off → `PACK_X` / `PACK_Y` in `geometry.js`
+- 1-bead grid spacing looks off → `PACK_X` / `PACK_Y` in `techniques/oneBead.js`
+- Bead shape too round/boxy → `beadShapeN` in the technique file (3-bead `2.4`, 1-bead `3.4`)
+- Lean angle of base beads → `Math.PI / 4` (45°) in `tiltFor`, `techniques/threeBead.js`
+- Add a whole new weave → a new file in `techniques/` + list it in `techniques/index.js`
 - Chart numbering direction → `rowLabel` / `colLabel` in `chart.js`
 - Guide-line frequency → `GUIDE_EVERY` in `chart.js`
 - Printed bead size → `printBeadMm` (default 8 mm)

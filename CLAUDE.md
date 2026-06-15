@@ -54,6 +54,15 @@ must be checked against the mockup, never assumed; that was a prior failure).
 - **`src/lib/chart.js`** — the printed-chart renderer (outlined beads, guide
   lines, edge numbers, colour-key legend) shared by the on-screen guides overlay
   and the PNG export.
+- **`src/techniques/`** — per-weave grid rules (`index.js` registry +
+  `threeBead.js` / `oneBead.js`). One artwork = one technique, chosen up front.
+  `App.jsx` and `chart.js` call through the **active technique** (`tech.beadExists`,
+  `tech.beadPath`, `tech.makeGeometry`, `tech.floodNeighbors`, `tech.snapPlace`,
+  pattern parity …) — they no longer import 3-bead math directly. `geometry.js`
+  is now the shared engine: `makeGeometry`/`beadCountFromCm` take `packX`/`packY`/
+  `stagger`, `beadAt`/`nearestBead` take a density fn, `beadPath` takes a
+  silhouette exponent. To add a weave: new file in `techniques/` + list it in
+  `index.js`. See DESIGN_DECISIONS "Multi-technique website".
 
 **Legacy Etch leftovers were deleted 2026-06-11** (`components/`, `parts/`,
 `static/`, the Tailwind/shadcn pipeline, `yarn.lock`). Everything under `src/`

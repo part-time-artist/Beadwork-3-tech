@@ -6,7 +6,7 @@
 // See BEADWORK_TOOL_SPEC.md and the locked design decisions in
 // ~/.claude/plans/distinch-and-with-outlines-curried-eich.md.
 
-import { makeGeometry, beadPath, beadExists } from './geometry'
+import { getTechnique } from '../techniques'
 
 export const PX_PER_MM = 11.81 // ~300 DPI raster
 export const A4 = { w: 210, h: 297 } // mm
@@ -43,22 +43,22 @@ const colLabel = (c) => c + 1
 
 // Build a print-scale geometry: bead width fixed to printBeadMm (default 8mm),
 // height following the real bead ratio. Returned dimensions are in pixels.
-export function makePrintGeo({ cols, rows, printBeadMm, beadRatio }) {
+export function makePrintGeo({ cols, rows, printBeadMm, beadRatio, tech }) {
   const Bw = printBeadMm * PX_PER_MM
   const Bh = printBeadMm * beadRatio * PX_PER_MM
-  return makeGeometry({ Bw, Bh, cols, rows })
+  return tech.makeGeometry({ Bw, Bh, cols, rows })
 }
 
 // --- shared bead drawing (used by screen + export) ----------------------------
-export function drawBeads(ctx, { geo, beads, cols, rows, tiltFor }) {
+export function drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech }) {
   const lw = Math.max(0.8, geo.Bw * 0.035)
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
-      if (!beadExists(col, row)) continue
+      if (!tech.beadExists(col, row)) continue
       const { cx, cy } = geo.centerFor(col, row)
       const fill = beads.get(key(col, row))
       const tilt = tiltFor(col, row)
-      beadPath(ctx, cx, cy, geo.Bw, geo.Bh, tilt)
+      tech.beadPath(ctx, cx, cy, geo.Bw, geo.Bh, tilt)
       if (fill) {
         ctx.fillStyle = fill
         ctx.fill()
@@ -137,10 +137,11 @@ function paintImageBackground(ctx, W, H, img, t = { scale: 1, fx: 0, fy: 0 }) {
 // Render the entire chart (beads + outlines + guides + edge numbers) to a fresh
 // canvas. A margin on the top/left holds the edge numbers. Returns the canvas.
 export function renderFullChart({
-  beads, cols, rows, tiltFor, printBeadMm = 8, beadRatio = 1.25,
+  beads, cols, rows, tiltFor, tech, printBeadMm = 8, beadRatio = 1.25,
   background, guides = true, numbers = true, every = GUIDE_EVERY,
 }) {
-  const geo = makePrintGeo({ cols, rows, printBeadMm, beadRatio })
+  tech = tech || getTechnique('3bead')
+  const geo = makePrintGeo({ cols, rows, printBeadMm, beadRatio, tech })
   const margin = numbers ? Math.max(11, printBeadMm * PX_PER_MM * 0.5) : 0
   const W = Math.ceil(margin + geo.width)
   const H = Math.ceil(margin + geo.height)
@@ -160,7 +161,7 @@ export function renderFullChart({
   if (background && background.type === 'image' && background.img) {
     paintImageBackground(ctx, geo.width, geo.height, background.img, background.t)
   }
-  drawBeads(ctx, { geo, beads, cols, rows, tiltFor })
+  drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech })
   if (guides) drawGuides(ctx, { geo, cols, rows, every })
   if (numbers) drawNumbers(ctx, { geo, cols, rows, every, mode: 'margin' })
   return canvas

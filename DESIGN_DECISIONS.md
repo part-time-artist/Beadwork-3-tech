@@ -280,6 +280,48 @@ IMPLEMENTED 2026-06-15 (in `src/App.jsx`):
 - Verified by `scripts/layercheck.mjs` (fresh=1 layer, separate Maps, add/undo,
   hidden layer excluded from export). Screenshot `scripts/view-layers.png`.
 
+## Multi-technique website (grilling 2026-06-15)
+The 1-bead and 3-bead tools become ONE app; the GRID is the only difference.
+Take the existing 3-bead app and make grid geometry pluggable per "technique";
+every other feature (layers, palette, save, export, background, draw/erase/
+select, brush, pattern, duplicate, iPad gestures) is shared as-is. The old
+1-bead codebase is NOT merged — only its grid model is recreated.
+LOCKED:
+1. **1-bead grid = aligned grid of bead-shaped cells.** Straight rows & columns,
+   NO stagger, NO tilt, every cell exists (full density), beads keep a real
+   width:height ratio + rounded bead shape (loom / square-stitch look). Flood
+   fill = 4 orthogonal neighbours. (3-bead stays exactly as today.)
+2. **One artwork = one technique, chosen up front.** A technique-chooser popup
+   appears at start / on "New artwork"; the choice is FIXED for that artwork —
+   no mid-artwork switching. (Changing technique = start a new artwork.)
+3. **Saved designs tagged by technique.** One shared "My designs" list; each
+   design records its technique and reopens in the matching grid. Auto-restore
+   and import/export carry the technique tag.
+Still to tune (visual, against a reference if available): the 1-bead bead ratio
+(default = same 4:5 as 3-bead, controllable by bead size), pitch/packing, and the
+rounded-rect bead silhouette.
+
+IMPLEMENTED 2026-06-15 (`src/techniques/` registry):
+- `techniques/{index,threeBead,oneBead}.js`. Each technique supplies geometry
+  (makeGeometry, beadCountFromCm, beadExists, beadAt, nearestBead), bead shape
+  (beadPath exponent) + tilt, flood-fill neighbours, snap axes, and pattern/
+  placement parity (snapMotifOrigin, copyStartOffset, evenUp, patternHalf,
+  snapPlace). `App.jsx` and `lib/chart.js` call through the active technique
+  instead of importing 3-bead math directly.
+- `geometry.js` generalised (backward-compatible): `makeGeometry`/`beadCountFromCm`
+  take `packX`/`packY`/`stagger`; `beadAt`/`nearestBead` take a density fn;
+  `beadPath` takes a silhouette exponent (cached per-n).
+- 1-bead packing measured from `assets/beadwork 1 grid.png` via
+  `scripts/measure1grid.mjs`: PACK_X 1.235, PACK_Y 1.273, stagger off, full
+  density, bead exponent 3.4 (boxier loom bead — tunable).
+- Chooser popup: forced at first start, cancellable via "New artwork" (My
+  designs card). `technique` tag added to saved design data; `applyDesign` reads
+  it (missing/unknown ⇒ 3-bead) so auto-restore, named slots and import/export
+  reopen in the matching grid.
+- Verified: `scripts/techcheck.mjs` (3-bead unchanged), `onebeadcheck.mjs`
+  (chooser + aligned grid), `techpersist.mjs` (technique round-trips on reload),
+  `exporttechcheck.mjs` (PNG charts for both: export-1bead.png / export-3bead.png).
+
 ## iPad / Apple Pencil pass (locked 2026-06-10)
 1. Primary device is **iPad + Apple Pencil**. Pencil (and desktop mouse) draws;
    **single-finger drag pans only** (Procreate-style — no stray marks).
