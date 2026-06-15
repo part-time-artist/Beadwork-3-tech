@@ -1,35 +1,20 @@
 // 3-bead weave technique (Kutch). Brick-offset lattice of oval beads, apex rows
 // half-density, woven tilt. This module collects the behaviours that used to be
-// inline in App.jsx so the app can swap in a different technique (see ./index).
-import {
-  makeGeometry as mkGeo,
-  beadCountFromCm as countCm,
-  beadAt as hitTest,
-  nearestBead as nearest,
-  beadPath as drawBeadPath,
-  beadExists as exists3,
-} from '../lib/geometry'
+// inline in App.jsx; the shared geometry methods come from defineTechnique
+// (packing/stagger default to the 3-bead values in geometry.js).
+import { beadExists } from '../lib/geometry'
+import { defineTechnique } from './defineTechnique'
 
-const N = 2.4 // bead silhouette exponent (soft oval)
-
-export default {
+export default defineTechnique({
   id: '3bead',
   label: '3-bead weave',
   subtitle: '3-BEAD TECHNIQUE',
-  beadShapeN: N,
-
-  // ---- geometry ----
-  makeGeometry: ({ Bw, Bh, cols, rows }) => mkGeo({ Bw, Bh, cols, rows }),
-  beadCountFromCm: countCm,
-  beadExists: exists3,
-  beadAt: (geo, x, y) => hitTest(geo, x, y, exists3),
-  nearestBead: (geo, x, y) => nearest(geo, x, y, exists3),
-  beadPath: (ctx, cx, cy, Bw, Bh, tilt = 0) => drawBeadPath(ctx, cx, cy, Bw, Bh, tilt, N),
+  exists: beadExists,
+  beadShapeN: 2.4, // soft oval silhouette
 
   // Apex (even) rows lie horizontal; tilted (odd) rows mirror ±45° in a
-  // checkerboard. `orient` other than 'woven' = all upright.
-  tiltFor: (col, row, orient) => {
-    if (orient !== 'woven') return 0
+  // checkerboard.
+  tiltFor: (col, row) => {
     if (row % 2 === 0) return Math.PI / 2
     const A = Math.PI / 4
     return ((row + 1) / 2 + col) % 2 === 1 ? -A : A
@@ -82,4 +67,4 @@ export default {
     if (((c - pl.baseC + dHalf) % 2 + 2) % 2 === 1) c += (x - geo.padX - off) / geo.Px > c ? 1 : -1
     return { c, r }
   },
-}
+})

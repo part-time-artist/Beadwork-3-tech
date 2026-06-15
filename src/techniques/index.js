@@ -3,6 +3,7 @@
 // "Multi-technique website"). Each technique supplies geometry, bead shape/tilt,
 // flood-fill neighbours and pattern/placement parity; App.jsx and the chart
 // renderer call through the active technique instead of importing 3-bead math.
+// The shared geometry-method factory lives in ./defineTechnique.
 import threeBead from './threeBead'
 import oneBead from './oneBead'
 

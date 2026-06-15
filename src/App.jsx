@@ -116,7 +116,6 @@ export default function Home() {
   const [showLayers, setShowLayers] = useState(false)
   const [tool, setTool] = useState('draw') // draw | erase | select
   const [color, setColor] = useState('#F3CEDE') // starts on the palette's pink
-  const [orient, setOrient] = useState('woven') // uniform | woven (tilted 3-bead)
   const [pack, setPack] = useState(0.75) // 0 = spaced (true size) … 1 = max packed; 0.75 ≈ touching
   const [brush, setBrush] = useState(1) // brush radius in beads
   const [recentColors, setRecentColors] = useState([]) // up to 5 recently used
@@ -369,8 +368,8 @@ export default function Home() {
   // Per-cell tilt (radians) — defined by the technique (3-bead woven tilt /
   // 1-bead upright). See each module's tiltFor.
   const tiltFor = useCallback(
-    (col, row) => tech.tiltFor(col, row, orient),
-    [orient, tech]
+    (col, row) => tech.tiltFor(col, row),
+    [tech]
   )
 
   // ---- background ----
@@ -1519,7 +1518,7 @@ export default function Home() {
   // the artwork's life, so switching = a blank canvas (the design data, history
   // and selection are reset). Canvas size, bead size and palette carry over.
   const newArtwork = (id) => {
-    setTechniqueId(getTechnique(id).id)
+    setTechniqueId(id)
     const l = makeLayer('Layer 1')
     layersRef.current = [l]
     activeIdRef.current = l.id

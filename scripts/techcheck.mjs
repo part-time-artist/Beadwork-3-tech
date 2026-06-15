@@ -11,6 +11,12 @@ page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + 
 await page.goto('http://localhost:3000/', { waitUntil: 'networkidle' })
 await page.waitForTimeout(800)
 
+// dismiss the technique chooser if it's up (first start), picking 3-bead
+if (await page.locator('.modal').isVisible().catch(() => false)) {
+  await page.locator('.techCard', { hasText: /3-bead/i }).click()
+  await page.waitForTimeout(300)
+}
+
 // clear
 const clearBtn = page.getByRole('button', { name: /Hold to clear/i })
 const cb = await clearBtn.boundingBox()
