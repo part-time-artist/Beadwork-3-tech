@@ -213,6 +213,25 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
 - Default drawing colour is now the palette pink `#F3CEDE` (was dark maroon).
 - Visual check: `scripts/duplicatecheck.mjs`.
 
+## Mirror a selection (2026-06-17)
+- Selection card gains **Mirror ↔** (left–right) and **Mirror ↕** (up–down).
+  Mirror **keeps the original and adds a flipped DUPLICATE beside it**, so the
+  two together read as a symmetric pair (butterfly). It is *not* an in-place
+  flip. One undo step; the new copy becomes the selection so it can be Moved or
+  mirrored again. (A first pass did in-place flip — corrected per the user: the
+  feature is duplicate-and-flip.)
+- Placement: the copy goes to the **right** (↔) / **below** (↕); if that side
+  lacks room it falls to the left / up. Beads off-canvas are dropped.
+- The mirror is a per-technique rule (`tech.mirror(cells, dir, side)`), because
+  the 3-bead weave is a staggered, half-density lattice — the copy must land on
+  existing nodes. Internally it reflects the cells in integer lattice units
+  (horizontally `X = 2·col + rowParity`; vertically `Y = row`) via `flip3`, then
+  translates by a **multiple of 2 columns** (keeps apex density `exists iff
+  col+row/2 odd` + the column/tilt parity) or a **multiple of 4 rows** (keeps
+  the odd-row offset + density), at least the selection's span so it never
+  overlaps the original. The 1-bead grid has no parity, so its mirror is a plain
+  reflection about the bounding box's far edge.
+
 ## Named designs + design files (2026-06-11)
 - "My designs" card (right panel): **multiple named design slots** in this
   browser (`beadwork3_designs_v1`), name pill + Save (same name overwrites),

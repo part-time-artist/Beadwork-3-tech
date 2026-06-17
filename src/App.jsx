@@ -603,6 +603,42 @@ export default function Home() {
     clearSelection()
   }
 
+  // Mirror the selection — horizontally ('h') or vertically ('v'). Keeps the
+  // originals and adds a flipped DUPLICATE beside them, so the two read as a
+  // symmetric pair. The technique builds the flipped copy on valid lattice
+  // nodes; we drop it to the right/down, or to the left/up if that side has more
+  // room. The new copy becomes the selection so it can be Moved or mirrored again.
+  const mirrorSelection = (dir) => {
+    if (!selection.size || !canEdit) return
+    const cells = []
+    for (const k of selection) {
+      const fill = beadsRef.current.get(k)
+      if (!fill) continue
+      const [col, row] = k.split(',').map(Number)
+      cells.push({ col, row, fill })
+    }
+    if (!cells.length) return
+    const fits = (arr) =>
+      arr.every(({ col, row }) => col >= 0 && col < cols && row >= 0 && row < rows)
+    let copy = tech.mirror(cells, dir, 1)
+    if (!fits(copy)) {
+      const alt = tech.mirror(cells, dir, -1) // not enough room on that side — go the other way
+      if (fits(alt)) copy = alt
+    }
+    const nextSel = new Set()
+    commit((prev) => {
+      const next = new Map(prev)
+      for (const { col, row, fill } of copy) {
+        if (col < 0 || col >= cols || row < 0 || row >= rows || !tech.beadExists(col, row)) continue
+        const k = key(col, row)
+        next.set(k, fill)
+        nextSel.add(k)
+      }
+      return next
+    })
+    setSelection(nextSel)
+  }
+
   // ---- duplicate / move & place ----------------------------------------------
   // Duplicate copies the selected coloured beads into a ghost "stamp"; Move
   // turns the selection itself into the ghost (originals hidden until placed
@@ -1895,10 +1931,16 @@ export default function Home() {
               <button className="ghost" onClick={deleteSelection} disabled={!selection.size || !canEdit}>Delete</button>
             </div>
             {!placing && (
-              <div className="pillRow">
-                <button className="ghost half" onClick={() => startPlacing('copy')} disabled={!selection.size || !canEdit}>Duplicate</button>
-                <button className="ghost half" onClick={() => startPlacing('move')} disabled={!selection.size || !canEdit}>Move</button>
-              </div>
+              <>
+                <div className="pillRow">
+                  <button className="ghost half" onClick={() => startPlacing('copy')} disabled={!selection.size || !canEdit}>Duplicate</button>
+                  <button className="ghost half" onClick={() => startPlacing('move')} disabled={!selection.size || !canEdit}>Move</button>
+                </div>
+                <div className="pillRow">
+                  <button className="ghost half" onClick={() => mirrorSelection('h')} disabled={!selection.size || !canEdit} title="Add a left–right flipped copy beside the selection">Mirror ↔</button>
+                  <button className="ghost half" onClick={() => mirrorSelection('v')} disabled={!selection.size || !canEdit} title="Add an up–down flipped copy below the selection">Mirror ↕</button>
+                </div>
+              </>
             )}
             {placing && (
               <>

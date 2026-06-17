@@ -50,4 +50,23 @@ export default defineTechnique({
     c: Math.round((x - geo.padX) / geo.Px),
     r: Math.round((y - geo.padY) / geo.Py),
   }),
+
+  // Mirror = a flipped DUPLICATE placed beside the original. Every cell exists
+  // and rows are aligned, so it's a plain reflection about the far edge of the
+  // bounding box: reflect within [mn,mx], then shift one span over so the copy
+  // sits next to the original. `side` = +1 (right / down) or −1 (left / up).
+  mirror: (cells, dir, side = 1) => {
+    const axis = dir === 'h' ? 'col' : 'row'
+    let mn = Infinity, mx = -Infinity
+    for (const c of cells) {
+      if (c[axis] < mn) mn = c[axis]
+      if (c[axis] > mx) mx = c[axis]
+    }
+    const span = mx - mn + 1
+    // reflect about mn (→ mx−(v−mn)), then translate one span to the chosen side
+    const map = (v) => mx - (v - mn) + side * span
+    return dir === 'h'
+      ? cells.map(({ col, row, fill }) => ({ col: map(col), row, fill }))
+      : cells.map(({ col, row, fill }) => ({ col, row: map(row), fill }))
+  },
 })
