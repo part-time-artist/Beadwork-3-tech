@@ -184,6 +184,13 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
 - Same day, per user: max packing raised to **20%** (`PACKED_DRAW` 1.15→1.2)
   so beads can press/overlap for a denser fabric look. Beads *kiss* at 0.75 of
   the slider — that's the default, so the default look is unchanged.
+- **2026-06-17 (per user): the PNG export now honours the spacing slider too.**
+  Previously the exported chart always drew beads at true (spaced) size, so a
+  packed on-screen design exported looking scattered. `renderFullChart` /
+  `drawBeads` (chart.js) take a `fillScale`; `exportPNG` passes the same
+  `1 + pack × (PACKED_DRAW − 1)` as the screen, so filled beads in the PNG are
+  enlarged identically (empty cells stay true-size; thin outlines kept for
+  countability). Bead centres, counts and the print pitch are unchanged.
 
 ## PNG export: browser canvas ceiling (fixed 2026-06-11)
 - Bug: **Save PNG silently produced a blank sheet.** The chart rasterises at

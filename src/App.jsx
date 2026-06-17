@@ -1540,6 +1540,8 @@ export default function Home() {
       printBeadMm,
       beadRatio,
       background: chartBackground(),
+      // match the on-screen packed look (same drawScale as drawScene)
+      fillScale: 1 + pack * (PACKED_DRAW - 1),
     })
     const legend = renderLegend(flat)
     const gap = 24

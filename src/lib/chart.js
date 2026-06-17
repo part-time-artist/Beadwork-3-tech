@@ -50,15 +50,23 @@ export function makePrintGeo({ cols, rows, printBeadMm, beadRatio, tech }) {
 }
 
 // --- shared bead drawing (used by screen + export) ----------------------------
-export function drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech }) {
+// `fillScale` enlarges FILLED beads (empty cells stay true size) so the export
+// reproduces the on-screen "packed" look set by the spacing slider — 1 = true
+// bead size with its natural gaps, >1 = beads pressed together. Mirrors the
+// drawScale in App.jsx's drawScene so screen and PNG match.
+export function drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech, fillScale = 1 }) {
   const lw = Math.max(0.8, geo.Bw * 0.035)
+  const dw = geo.Bw * fillScale
+  const dh = geo.Bh * fillScale
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
       if (!tech.beadExists(col, row)) continue
       const { cx, cy } = geo.centerFor(col, row)
       const fill = beads.get(key(col, row))
       const tilt = tiltFor(col, row)
-      tech.beadPath(ctx, cx, cy, geo.Bw, geo.Bh, tilt)
+      // filled beads draw enlarged (packed); empty cells stay true-size so the
+      // grid underneath stays readable
+      tech.beadPath(ctx, cx, cy, fill ? dw : geo.Bw, fill ? dh : geo.Bh, tilt)
       if (fill) {
         ctx.fillStyle = fill
         ctx.fill()
@@ -138,7 +146,7 @@ function paintImageBackground(ctx, W, H, img, t = { scale: 1, fx: 0, fy: 0 }) {
 // canvas. A margin on the top/left holds the edge numbers. Returns the canvas.
 export function renderFullChart({
   beads, cols, rows, tiltFor, tech, printBeadMm = 8, beadRatio = 1.25,
-  background, guides = true, numbers = true, every = GUIDE_EVERY,
+  background, guides = true, numbers = true, every = GUIDE_EVERY, fillScale = 1,
 }) {
   tech = tech || getTechnique('3bead')
   const geo = makePrintGeo({ cols, rows, printBeadMm, beadRatio, tech })
@@ -161,7 +169,7 @@ export function renderFullChart({
   if (background && background.type === 'image' && background.img) {
     paintImageBackground(ctx, geo.width, geo.height, background.img, background.t)
   }
-  drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech })
+  drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech, fillScale })
   if (guides) drawGuides(ctx, { geo, cols, rows, every })
   if (numbers) drawNumbers(ctx, { geo, cols, rows, every, mode: 'margin' })
   return canvas
