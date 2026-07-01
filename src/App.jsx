@@ -1194,12 +1194,12 @@ export default function Home() {
             if (!p) { p = new Path2D(); byColor.set(fill, p) }
             const { cx, cy } = geo.centerFor(col, row)
             if (simple) {
-              // fast overview: fill the whole cell so the zoomed-out design reads
-              // as a solid low-res image, not dots. Half-density apex (even) rows
-              // sit 2 pitches apart, so their cell is double-wide; a hair of
-              // overlap avoids seams. (Detailed ovals return once zoomed in.)
-              const cw = (row % 2 === 0 ? geo.Px * 2 : geo.Px) * 1.03
-              const ch = geo.Py * 1.06
+              // fast overview: fill each cell so the zoomed-out design reads as a
+              // solid low-res image, not dots. Half-density apex (even) rows sit 2
+              // pitches apart, so their cell is double-wide. Exact pitch so cells
+              // tile edge-to-edge without the overlap that blobbed together.
+              const cw = row % 2 === 0 ? geo.Px * 2 : geo.Px
+              const ch = geo.Py
               p.rect(cx - cw / 2, cy - ch / 2, cw, ch)
             } else tech.beadOutline(p, cx, cy, dw, dh, tiltFor(col, row))
           }
@@ -1276,8 +1276,43 @@ export default function Home() {
         }
         ctx.globalAlpha = 1
       }
+
+      // cm ruler along the top + left edges, so a design can be measured in real
+      // centimetres. Drawn in document space (moves + rotates with the canvas) but
+      // sized in screen px (÷scale) so ticks/numbers stay a constant readable size.
+      {
+        const pxPerCmX = geo.width / canvasCm.w
+        const pxPerCmY = geo.height / canvasCm.h
+        const u = 1 / scale
+        ctx.save()
+        ctx.strokeStyle = 'rgba(150,144,130,0.85)'
+        ctx.fillStyle = 'rgba(120,114,101,0.95)'
+        ctx.lineWidth = 1 * u
+        ctx.font = `${9 * u}px ${T.mono}`
+        // top edge (numbers above the canvas)
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'alphabetic'
+        for (let cm = 0; cm <= canvasCm.w; cm++) {
+          const x = cm * pxPerCmX
+          const major = cm % 5 === 0
+          const len = (major ? 9 : 5) * u
+          ctx.beginPath(); ctx.moveTo(x, -2 * u); ctx.lineTo(x, -2 * u - len); ctx.stroke()
+          if (major) ctx.fillText(String(cm), x, -2 * u - len - 3 * u)
+        }
+        // left edge (numbers left of the canvas)
+        ctx.textAlign = 'right'
+        ctx.textBaseline = 'middle'
+        for (let cm = 0; cm <= canvasCm.h; cm++) {
+          const y = cm * pxPerCmY
+          const major = cm % 5 === 0
+          const len = (major ? 9 : 5) * u
+          ctx.beginPath(); ctx.moveTo(-2 * u, y); ctx.lineTo(-2 * u - len, y); ctx.stroke()
+          if (major) ctx.fillText(String(cm), -2 * u - len - 3 * u, y)
+        }
+        ctx.restore()
+      }
     },
-    [viewport, view, geo, beads, layers, activeId, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing, tech]
+    [viewport, view, geo, beads, layers, activeId, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing, tech, canvasCm]
   )
 
   // Fast stroke repaint: blit the scene snapshot taken at stroke start, then draw
