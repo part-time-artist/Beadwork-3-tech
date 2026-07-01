@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { getTechnique, DEFAULT_TECHNIQUE, TECHNIQUES } from './techniques'
-import { renderFullChart, renderLegend, rasterScale } from './lib/chart'
+import { renderFullChart, renderLegend, rasterScale, PX_PER_MM } from './lib/chart'
 import {
   listArtworks,
   getArtwork,
@@ -96,6 +96,10 @@ function timeAgo(ts) {
 // counts and the printed chart are untouched.
 const PACKED_DRAW = 1.2
 
+// Reference images are downscaled to this longest side before storing, so a
+// full-res phone photo can't decode to tens of MB and crash iPad Safari.
+const MAX_IMG_SIDE = 2400
+
 export default function Home() {
   // ---- technique ----
   // One artwork = one technique, FIXED for that artwork (no mid-artwork
@@ -152,14 +156,32 @@ export default function Home() {
   // into the active layer entry. Where two visible layers fill the same node
   // the TOP one wins (a woven bead is one solid colour — no blending).
   const uid = () => Math.random().toString(36).slice(2, 9)
+  // Three layer types share one stack: 'bg' (the solid background colour, always
+  // layers[0], hide ⇒ transparent), 'image' (a placeable reference photo) and
+  // 'bead' (the paintable default). bead/image carry an (often empty) beads Map
+  // so bead-count budgets and merge maths stay uniform.
   const makeLayer = (name, beadMap = new Map()) => ({
-    id: uid(), name, visible: true, locked: false, beads: beadMap,
+    id: uid(), name, type: 'bead', visible: true, locked: false, alphaLock: false, beads: beadMap,
   })
-  const firstLayerRef = useRef(null)
-  if (!firstLayerRef.current) firstLayerRef.current = makeLayer('Layer 1')
-  const [layers, setLayers] = useState(() => [firstLayerRef.current])
-  const [activeId, setActiveId] = useState(() => firstLayerRef.current.id)
-  const [beads, setBeads] = useState(() => firstLayerRef.current.beads)
+  const makeBgLayer = (color = '#FFFFFF') => ({
+    id: uid(), name: 'Background', type: 'bg', visible: true, locked: false, alphaLock: false,
+    color, beads: new Map(),
+  })
+  // src = persisted data URL; img = the runtime HTMLImageElement (reloaded from
+  // src on open). t = placement in DOC pixels (so it stays fixed when the canvas
+  // cm size changes). opacity dims it for tracing.
+  const makeImageLayer = (src, img = null, t = null, opacity = 1) => ({
+    id: uid(), name: 'Image', type: 'image', visible: true, locked: false, alphaLock: false,
+    src, img, t: t || { x: 0, y: 0, scale: 1 }, opacity, beads: new Map(),
+  })
+  const firstLayersRef = useRef(null)
+  if (!firstLayersRef.current) {
+    const beadL = makeLayer('Layer 1')
+    firstLayersRef.current = { layers: [makeBgLayer('#FFFFFF'), beadL], activeId: beadL.id }
+  }
+  const [layers, setLayers] = useState(() => firstLayersRef.current.layers)
+  const [activeId, setActiveId] = useState(() => firstLayersRef.current.activeId)
+  const [beads, setBeads] = useState(() => firstLayersRef.current.layers.find((l) => l.type === 'bead').beads)
   const [showLayers, setShowLayers] = useState(false)
   const [tool, setTool] = useState('draw') // draw | erase | select
   const [color, setColor] = useState('#F3CEDE') // starts on the palette's pink
@@ -171,6 +193,15 @@ export default function Home() {
 
   const pushRecent = useCallback((c) => {
     setRecentColors((prev) => [c, ...prev.filter((x) => x !== c)].slice(0, 5))
+  }, [])
+
+  // Transient toast (e.g. "layer is locked"); auto-clears after a moment.
+  const [toast, setToast] = useState(null)
+  const toastTimer = useRef(0)
+  const showToast = useCallback((msg) => {
+    setToast(msg)
+    clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 1900)
   }, [])
 
   // ---- undo / redo ----
@@ -205,6 +236,21 @@ export default function Home() {
       rafRef.current = 0
       const canvas = canvasRef.current
       if (canvas && drawRef.current) drawRef.current(canvas.getContext('2d'))
+    })
+  }, [])
+
+  // The brush hover ghost lives on its OWN thin canvas stacked over the board.
+  // Repainting only the ghost (a handful of ovals) instead of the whole scene
+  // (thousands of outlined beads on a big canvas) keeps it glued to the cursor —
+  // previously it rode the full-scene rAF and lagged a few frames behind ("train").
+  const overlayRafRef = useRef(0)
+  const overlayDrawRef = useRef(null) // latest drawOverlay (assigned every render)
+  const requestOverlay = useCallback(() => {
+    if (overlayRafRef.current) return
+    overlayRafRef.current = requestAnimationFrame(() => {
+      overlayRafRef.current = 0
+      const canvas = overlayRef.current
+      if (canvas && overlayDrawRef.current) overlayDrawRef.current(canvas.getContext('2d'))
     })
   }, [])
 
@@ -333,10 +379,13 @@ export default function Home() {
   }
 
   const duplicateLayer = (id) => {
-    pushHistory(currentDoc())
     const idx = layersRef.current.findIndex((l) => l.id === id)
     const src = layersRef.current[idx]
-    const copy = { ...makeLayer(`${src.name} copy`, new Map(src.beads)), visible: src.visible }
+    if (!src || src.type === 'bg') return // the background colour isn't duplicable
+    pushHistory(currentDoc())
+    const copy = src.type === 'image'
+      ? { ...makeImageLayer(src.src, src.img, { ...src.t }, src.opacity), name: `${src.name} copy`, visible: src.visible }
+      : { ...makeLayer(`${src.name} copy`, new Map(src.beads)), visible: src.visible, locked: src.locked, alphaLock: src.alphaLock }
     const nl = [...layersRef.current]
     nl.splice(idx + 1, 0, copy)
     layersRef.current = nl
@@ -347,24 +396,35 @@ export default function Home() {
   }
 
   const deleteLayer = (id) => {
-    if (layersRef.current.length <= 1) return // always keep at least one layer
+    const target = layersRef.current.find((l) => l.id === id)
+    if (!target || target.type === 'bg') return // never delete the background layer
+    // keep at least one bead layer so there's always somewhere to draw
+    if (target.type === 'bead' && layersRef.current.filter((l) => l.type === 'bead').length <= 1) {
+      showToast('Keep at least one bead layer')
+      return
+    }
     pushHistory(currentDoc())
     const nl = layersRef.current.filter((l) => l.id !== id)
     layersRef.current = nl
     setLayers(nl)
-    if (activeIdRef.current === id) makeActive(nl[nl.length - 1])
+    if (adjustIdRef.current === id) setAdjustId(null)
+    if (activeIdRef.current === id) {
+      const fallback = [...nl].reverse().find((l) => l.type === 'bead') || nl[nl.length - 1]
+      makeActive(fallback)
+    }
     setSelection(new Set())
     setPlacing(null)
   }
 
   // Merge a layer DOWN into the one below it; top-wins, so the upper layer's
-  // beads overwrite the lower's where they share a node.
+  // beads overwrite the lower's where they share a node. Bead layers only.
   const mergeDown = (id) => {
     const idx = layersRef.current.findIndex((l) => l.id === id)
     if (idx <= 0) return // nothing below to merge into
-    pushHistory(currentDoc())
     const upper = layersRef.current[idx]
     const lower = layersRef.current[idx - 1]
+    if (upper.type !== 'bead' || lower.type !== 'bead') return // only bead↓bead merges
+    pushHistory(currentDoc())
     const merged = new Map(lower.beads)
     for (const [k, v] of upper.beads) merged.set(k, v)
     const lowerMerged = { ...lower, beads: merged }
@@ -378,11 +438,13 @@ export default function Home() {
     setPlacing(null)
   }
 
-  // dir +1 = move up toward the top, -1 = down toward the bottom
+  // dir +1 = move up toward the top, -1 = down toward the bottom. The bg layer
+  // is pinned to the bottom (index 0) and nothing may move below it.
   const moveLayer = (id, dir) => {
     const idx = layersRef.current.findIndex((l) => l.id === id)
+    if (layersRef.current[idx]?.type === 'bg') return // bg never moves
     const j = idx + dir
-    if (j < 0 || j >= layersRef.current.length) return
+    if (j < 1 || j >= layersRef.current.length) return // index 0 stays the bg layer
     pushHistory(currentDoc())
     const nl = [...layersRef.current]
     const [m] = nl.splice(idx, 1)
@@ -407,10 +469,34 @@ export default function Home() {
     layersRef.current = nl
     setLayers(nl)
   }
+  const toggleAlphaLock = (id) => {
+    const nl = layersRef.current.map((l) => (l.id === id ? { ...l, alphaLock: !l.alphaLock } : l))
+    layersRef.current = nl
+    setLayers(nl)
+  }
 
   const activeLayer = layers.find((l) => l.id === activeId) || null
-  const canEdit = !!activeLayer && activeLayer.visible && !activeLayer.locked
+  // A bead layer can be drawn on only when it's visible, unlocked, and not an
+  // image/background layer (those hold no bead Map to paint into).
+  const canEdit = !!activeLayer && activeLayer.visible && !activeLayer.locked &&
+    activeLayer.type !== 'image' && activeLayer.type !== 'bg'
   canEditRef.current = canEdit
+  // alpha lock: when on, drawing/fill may only RECOLOUR beads already on the
+  // active layer — never add to an empty cell or erase (no shape change).
+  const alphaLockRef = useRef(false)
+  alphaLockRef.current = !!(activeLayer && activeLayer.alphaLock)
+  // Why drawing is blocked on the active layer — shown as a toast on attempt.
+  const blockedReason = useCallback(() => {
+    const l = activeLayer
+    if (!l) return 'No layer selected'
+    if (l.type === 'image') return 'Image layer — switch to a bead layer to draw'
+    if (l.type === 'bg') return 'Background layer — switch to a bead layer to draw'
+    if (!l.visible) return 'Layer is hidden — show it to draw'
+    if (l.locked) return 'Layer is locked — unlock it to draw'
+    return 'Can’t draw on this layer'
+  }, [activeLayer])
+  const blockedRef = useRef(blockedReason)
+  blockedRef.current = blockedReason
 
   // Per-cell tilt (radians) — defined by the technique (3-bead woven tilt /
   // 1-bead upright). See each module's tiltFor.
@@ -419,38 +505,111 @@ export default function Home() {
     [tech]
   )
 
-  // ---- background ----
-  // On screen the canvas always has a real background (solid colour or image);
-  // transparency is purely an EXPORT choice (exportBg below).
-  const [bg, setBg] = useState({ type: 'solid', color: '#FFFFFF', image: null })
-  const bgImgRef = useRef(null)
+  // ---- background & image layers ----
+  // The bottom layer (layers[0], type 'bg') is the solid background colour; hide
+  // it for a transparent canvas. Reference photos are 'image' layers above it.
+  // Adjust mode routes canvas gestures to move/resize ONE image layer.
+  const [adjustId, setAdjustId] = useState(null)
+  const adjustIdRef = useRef(null)
+  adjustIdRef.current = adjustId
+  const bgLayer = layers[0] && layers[0].type === 'bg' ? layers[0] : null
+  const adjustLayer = adjustId ? layers.find((l) => l.id === adjustId && l.type === 'image') : null
 
-  // Background-image placement: offset (doc px) + scale on top of the cover
-  // fit, so the reference design can be positioned under the beads. While
-  // bgAdjust is on, canvas gestures move/resize the IMAGE instead of painting.
-  const [bgT, setBgT] = useState({ x: 0, y: 0, scale: 1 })
-  const [bgShown, setBgShown] = useState(true) // hide ⇒ falls back to the solid colour
-  const [bgAdjust, setBgAdjust] = useState(false)
-  const bgAdjustRef = useRef(false)
-  bgAdjustRef.current = bgAdjust
+  // Update one layer (no undo step — used for live image move/resize, colour).
+  const updateLayer = useCallback((id, patch) => {
+    const nl = layersRef.current.map((l) =>
+      l.id === id ? { ...l, ...(typeof patch === 'function' ? patch(l) : patch) } : l
+    )
+    layersRef.current = nl
+    setLayers(nl)
+  }, [])
 
-  // resize the image by `factor` keeping the doc point under (sx,sy) fixed
+  // Snap an image's edges/corners to the canvas edges (0,0 → docW,docH) when
+  // within ~12 doc px, so a reference can be lined up to the canvas exactly.
+  const snapImageT = useCallback((t, img) => {
+    if (!img) return t
+    const docW = geo.width
+    const docH = geo.height
+    const w = img.width * t.scale
+    const h = img.height * t.scale
+    const TH = 12
+    let { x, y } = t
+    if (Math.abs(x) < TH) x = 0                         // left → canvas left
+    else if (Math.abs(x + w - docW) < TH) x = docW - w  // right → canvas right
+    if (Math.abs(y) < TH) y = 0                         // top → canvas top
+    else if (Math.abs(y + h - docH) < TH) y = docH - h  // bottom → canvas bottom
+    return { ...t, x, y }
+  }, [geo.width, geo.height])
+
+  // resize the adjust image by `factor`, keeping the doc point under (sx,sy) fixed
   const imageZoomAt = (factor, sx, sy) => {
+    const l = adjustIdRef.current
+      ? layersRef.current.find((x) => x.id === adjustIdRef.current && x.type === 'image')
+      : null
+    if (!l || !l.img) return
     const m = screenToDoc(sx, sy, view)
-    setBgT((t) => {
-      const ns = clampNum(t.scale * factor, 0.2, 8)
-      const ff = ns / t.scale
-      const cx = geo.width / 2 + t.x
-      const cy = geo.height / 2 + t.y
-      return {
-        scale: ns,
-        x: m.x - (m.x - cx) * ff - geo.width / 2,
-        y: m.y - (m.y - cy) * ff - geo.height / 2,
-      }
+    updateLayer(l.id, (lay) => {
+      const ns = clampNum(lay.t.scale * factor, 0.05, 12)
+      const ff = ns / lay.t.scale
+      // keep the doc point under the cursor fixed as the image scales about it
+      return { t: snapImageT({ scale: ns, x: m.x - (m.x - lay.t.x) * ff, y: m.y - (m.y - lay.t.y) * ff }, lay.img) }
     })
   }
   const imageZoomAtRef = useRef(imageZoomAt)
   imageZoomAtRef.current = imageZoomAt
+
+  const setBgColor = (color) => { if (bgLayer) updateLayer(bgLayer.id, { color }) }
+
+  // Add a reference photo as a new image layer above the active layer, then
+  // jump straight into Adjust mode to place it (it starts contain-fit, centred).
+  const addImageLayer = (file) => {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const src = reader.result
+      const img = new Image()
+      img.onload = () => {
+        // Downscale big photos before storing: a full-res phone shot decodes to
+        // tens of MB and is saved into IndexedDB on every artwork — a prime
+        // cause of iPad Safari killing the tab. Cap the longest side; keep the
+        // downscaled canvas as the layer bitmap and a JPEG data URL as `src`.
+        let finalImg = img
+        let finalSrc = src
+        const longest = Math.max(img.width, img.height)
+        if (longest > MAX_IMG_SIDE) {
+          const k = MAX_IMG_SIDE / longest
+          const cw = Math.max(1, Math.round(img.width * k))
+          const ch = Math.max(1, Math.round(img.height * k))
+          const cnv = document.createElement('canvas')
+          cnv.width = cw; cnv.height = ch
+          cnv.getContext('2d').drawImage(img, 0, 0, cw, ch)
+          finalImg = cnv // a canvas works as a drawImage source and has w/h
+          finalSrc = cnv.toDataURL('image/jpeg', 0.85)
+        }
+        const docW = geo.width
+        const docH = geo.height
+        const iw = finalImg.width
+        const ih = finalImg.height
+        const scale = Math.min(docW / iw, docH / ih) || 1
+        const t = { scale, x: (docW - iw * scale) / 2, y: (docH - ih * scale) / 2 }
+        pushHistory(currentDoc())
+        const layer = makeImageLayer(finalSrc, finalImg, t, 1)
+        const idx = layersRef.current.findIndex((x) => x.id === activeIdRef.current)
+        const nl = [...layersRef.current]
+        nl.splice(Math.max(1, idx + 1), 0, layer) // above active, never below bg
+        layersRef.current = nl
+        setLayers(nl)
+        makeActive(layer) // select it (beadsRef → its empty Map; drawing stays blocked)
+        setAdjustId(layer.id)
+        setShowLayers(true)
+        setSelection(new Set())
+        setPlacing(null)
+        requestRedraw()
+      }
+      img.src = src
+    }
+    reader.readAsDataURL(file)
+  }
 
   // ---- printed-chart settings ----
   const [printBeadMm, setPrintBeadMm] = useState(8) // fixed bead size on paper (mm)
@@ -478,10 +637,13 @@ export default function Home() {
   // ---- mutate beads ----
   const floodFill = useCallback(
     (cell, useColor = color) => {
-      if (!cell || !canEditRef.current) return
+      if (!cell) return
+      if (!canEditRef.current) { showToast(blockedRef.current()); return }
       commit((prev) => {
         const target = prev.get(key(cell.col, cell.row)) || null
         if (target === useColor) return prev
+        // alpha lock: fill may only recolour existing beads, not flood empty cells
+        if (alphaLockRef.current && target === null) return prev
         const next = new Map(prev)
         const stack = [cell]
         const seen = new Set()
@@ -537,22 +699,59 @@ export default function Home() {
     (x, y, mode) => {
       const cells = brushCells(x, y)
       if (!cells.length) return
-      applyBeads((prev) => {
-        let next = null
-        for (const { col, row } of cells) {
-          const k = key(col, row)
-          if (mode === 'erase') {
-            if ((next || prev).has(k)) { next = next || new Map(prev); next.delete(k) }
-          } else if ((next || prev).get(k) !== color) {
-            next = next || new Map(prev)
-            next.set(k, color)
-          }
+      const alpha = alphaLockRef.current // recolour-only: no shape change
+      // Mutate the active bead Map IN PLACE, cloning it ONCE per stroke (lazily,
+      // on the first real change). `strokeBase` holds the pre-stroke Map; while
+      // beadsRef still points at it we clone before the first write, then keep
+      // mutating that private copy. This avoids cloning the whole Map on every
+      // pointer event (240Hz) — the allocation churn that crashed iPad Safari on
+      // dense designs. Undo is unaffected: strokeBase stays untouched, and an
+      // all-no-op stroke never clones, so beadsRef === strokeBase → no commit.
+      let map = beadsRef.current
+      let changed = false
+      for (const { col, row } of cells) {
+        const k = key(col, row)
+        if (mode === 'erase') {
+          if (alpha) continue // alpha lock: erasing would change shape
+          if (!map.has(k)) continue
+          if (map === strokeBase.current) { map = new Map(map); beadsRef.current = map }
+          map.delete(k); changed = true
+        } else {
+          if (map.get(k) === color) continue
+          if (alpha && !map.has(k)) continue // only recolour existing beads
+          if (map === strokeBase.current) { map = new Map(map); beadsRef.current = map }
+          map.set(k, color); changed = true
         }
-        return next || prev
-      }, true) // silent: strokes repaint via rAF, no React render per event
+      }
+      if (changed) {
+        patternBaseRef.current = null // any normal edit ends pattern layout-swapping
+        requestRedraw() // silent: strokes repaint via rAF, no React render per event
+      }
     },
-    [brushCells, color, applyBeads]
+    [brushCells, color, requestRedraw]
   )
+
+  // ---- desktop brush hover preview ----
+  // The beads the current brush would paint are ghosted grey on hover so the
+  // user sees the footprint before clicking. Stored in a ref + repainted via
+  // rAF (no React render); drawOverlay reads hoverRef.current and paints it on
+  // the overlay canvas. Desktop mouse only — pen/touch have no hover state.
+  const hoverRef = useRef([])
+  const setHoverCells = useCallback(
+    (cells) => {
+      const cur = hoverRef.current
+      const same = cur.length === cells.length &&
+        cur.every((c, i) => c.col === cells[i].col && c.row === cells[i].row)
+      if (same) return
+      hoverRef.current = cells
+      requestOverlay() // repaint only the ghost overlay, not the whole scene
+    },
+    [requestOverlay]
+  )
+  // drop a stale ghost when switching away from a paint tool or losing edit
+  useEffect(() => {
+    if (hoverRef.current.length) setHoverCells([])
+  }, [tool, canEdit, brush, setHoverCells])
 
   // ---- selection (marquee Select tool) ----
   const finalizeSelection = useCallback(
@@ -790,7 +989,13 @@ export default function Home() {
   useEffect(() => {
     const onKey = (e) => {
       if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return
-      if (e.target !== document.body) return // don't steal from inputs
+      // Only let an actively-edited text field keep its own native undo. For
+      // everything else (the canvas, the body) Ctrl/⌘+Z is OUR bead undo.
+      // (Previously this required e.target===document.body, but after clicking a
+      // canvas-size pill focus stayed on the input, so our undo never ran and
+      // the browser's native text-undo reverted the cm field → resized canvas.)
+      const t = e.target
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
       e.preventDefault()
       if (e.shiftKey) redo()
       else undo()
@@ -801,6 +1006,7 @@ export default function Home() {
 
   // ---- canvas drawing ----
   const canvasRef = useRef(null)
+  const overlayRef = useRef(null) // hover-ghost canvas, stacked over canvasRef
   const wrapRef = useRef(null)
   const DPR = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
 
@@ -846,22 +1052,13 @@ export default function Home() {
         tx * DPR, ty * DPR
       )
 
-      // document background (a hidden image falls back to the solid colour)
-      const imageShowing = bg.type === 'image' && bgShown && bgImgRef.current
-      if (bg.type === 'solid' || (bg.type === 'image' && !imageShowing)) {
-        ctx.fillStyle = bg.color
+      // base layer: the bottom 'bg' layer's solid colour, or — when it is hidden
+      // — the transparency checker. Image + bead layers composite over this in
+      // z-order below.
+      const bgL = layers[0] && layers[0].type === 'bg' ? layers[0] : null
+      if (bgL && bgL.visible) {
+        ctx.fillStyle = bgL.color
         ctx.fillRect(0, 0, docW, docH)
-      } else if (imageShowing) {
-        const img = bgImgRef.current
-        const s = Math.max(docW / img.width, docH / img.height) * bgT.scale
-        const dw = img.width * s
-        const dh = img.height * s
-        ctx.save()
-        ctx.beginPath()
-        ctx.rect(0, 0, docW, docH)
-        ctx.clip() // the image never spills past the canvas edges
-        ctx.drawImage(img, (docW - dw) / 2 + bgT.x, (docH - dh) / 2 + bgT.y, dw, dh)
-        ctx.restore()
       } else if (checkerTile) {
         ctx.fillStyle = ctx.createPattern(checkerTile, 'repeat')
         ctx.fillRect(0, 0, docW, docH)
@@ -897,72 +1094,96 @@ export default function Home() {
       const dw = Bw * drawScale
       const dh = Bh * drawScale
 
-      // composite the visible layers TOP-wins. The active layer reads from
-      // beadsRef (live, so silent stroke repaints show); the others read their
-      // own Maps from `layers` state (they can't change mid-stroke). `beads`
-      // stays in the deps so committed active-layer edits still trigger redraw.
+      // Composite the visible layers in z-order (bottom→top), so an image layer
+      // sitting between two bead layers paints in the right place and the top
+      // bead wins where beads overlap. The active bead layer reads beadsRef
+      // (live, so silent stroke repaints show); others read their own Maps.
+      // `beads` stays in the deps so committed active-layer edits trigger redraw.
       const liveBeads = beadsRef.current
       const visLayers = layers.filter((l) => l.visible)
       const aId = activeId
-      const fillAt = (k) => {
-        for (let i = visLayers.length - 1; i >= 0; i--) {
-          const lay = visLayers[i]
-          if (lay.id === aId) {
-            // beads being MOVED draw only as the ghost, not at their old spot
-            // (nothing is deleted until Place, so Cancel just unhides them)
-            if (placing?.hide?.has(k)) continue
-            const v = liveBeads.get(k)
-            if (v) return v
-          } else {
-            const v = lay.beads.get(k)
-            if (v) return v
+      const beadMapOf = (lay) => (lay.id === aId ? liveBeads : lay.beads)
+      const imageShowing = visLayers.some((l) => l.type === 'image' && l.img)
+      // Which cells end up filled in ANY visible layer (so the empty-outline pass
+      // can skip them). Numeric id, not a "col,row" string, to avoid allocating a
+      // key per cell in the hot loop. Populated as we draw the beads below.
+      const filledCells = new Set()
+      const cellId = (col, row) => row * cols + col
+
+      for (const lay of visLayers) {
+        if (lay.type === 'bg') continue // already painted as the base
+        if (lay.type === 'image') {
+          if (!lay.img) continue
+          ctx.save()
+          ctx.beginPath(); ctx.rect(0, 0, docW, docH); ctx.clip() // never spill past canvas
+          ctx.globalAlpha = lay.opacity == null ? 1 : lay.opacity
+          ctx.drawImage(lay.img, lay.t.x, lay.t.y, lay.img.width * lay.t.scale, lay.img.height * lay.t.scale)
+          ctx.restore()
+          continue
+        }
+        // bead layer: draw only its filled beads (top-wins emerges from z-order).
+        // Batch beads of the same colour into one Path2D and fill it in a single
+        // call — thousands of per-bead ctx.fill()s were the on-screen lag.
+        const map = beadMapOf(lay)
+        if (!map.size) continue
+        const isActive = lay.id === aId
+        const byColor = new Map() // colour -> Path2D
+        for (let row = r0; row < r1; row++) {
+          for (let col = c0; col < c1; col++) {
+            if (!tech.beadExists(col, row)) continue
+            const k = key(col, row)
+            if (isActive && placing?.hide?.has(k)) continue
+            const fill = map.get(k)
+            if (!fill) continue
+            filledCells.add(cellId(col, row))
+            let p = byColor.get(fill)
+            if (!p) { p = new Path2D(); byColor.set(fill, p) }
+            const { cx, cy } = geo.centerFor(col, row)
+            if (simple) p.rect(cx - dw / 2, cy - dh / 2, dw, dh)
+            else tech.beadOutline(p, cx, cy, dw, dh, tiltFor(col, row))
           }
         }
-        return undefined
-      }
-      for (let row = r0; row < r1; row++) {
-        for (let col = c0; col < c1; col++) {
-          if (!tech.beadExists(col, row)) continue
-          const { cx, cy } = geo.centerFor(col, row)
-          const k = key(col, row)
-          const fill = fillAt(k)
-          if (simple) {
-            if (fill) {
-              ctx.fillStyle = fill
-              ctx.fillRect(cx - dw / 2, cy - dh / 2, dw, dh)
-            }
-            continue
-          }
-          const tilt = tiltFor(col, row)
-          if (fill) {
-            tech.beadPath(ctx, cx, cy, dw, dh, tilt)
-            ctx.fillStyle = fill
-            ctx.fill()
-          } else if (drawOutlines) {
-            tech.beadPath(ctx, cx, cy, Bw, Bh, tilt)
-            // over a visible reference image, empty beads are outline-only so
-            // the design underneath stays visible; otherwise a very slight grey
-            if (!imageShowing) {
-              ctx.fillStyle = '#eaeaeb'
-              ctx.fill()
-            }
-            ctx.stroke()
-          }
+        for (const [fill, p] of byColor) {
+          ctx.fillStyle = fill
+          ctx.fill(p)
         }
       }
 
-      // selection highlight (accent ring around selected beads)
+      // empty-cell grid outlines, for cells with no bead in any visible layer
+      // (skipped when beads are tiny on screen). Over a reference image they stay
+      // outline-only so the design shows through. Batched into ONE path so the
+      // whole grid is a single fill + single stroke.
+      if (!simple && drawOutlines) {
+        const emptyPath = new Path2D()
+        for (let row = r0; row < r1; row++) {
+          for (let col = c0; col < c1; col++) {
+            if (!tech.beadExists(col, row)) continue
+            if (filledCells.has(cellId(col, row))) continue
+            const { cx, cy } = geo.centerFor(col, row)
+            tech.beadOutline(emptyPath, cx, cy, Bw, Bh, tiltFor(col, row))
+          }
+        }
+        if (!imageShowing) { ctx.fillStyle = '#eaeaeb'; ctx.fill(emptyPath) }
+        ctx.lineWidth = 1.25 / scale
+        ctx.strokeStyle = '#cdcac3'
+        ctx.stroke(emptyPath)
+      }
+
+      // (brush hover ghost is painted on the overlay canvas — see drawOverlay)
+
+      // selection highlight (accent ring around selected beads) — one batched path
       if (selection.size) {
-        ctx.lineWidth = 2 / scale
-        ctx.strokeStyle = T.accent
+        const selPath = new Path2D()
         for (let row = r0; row < r1; row++) {
           for (let col = c0; col < c1; col++) {
             if (!tech.beadExists(col, row) || !selection.has(key(col, row))) continue
             const { cx, cy } = geo.centerFor(col, row)
-            tech.beadPath(ctx, cx, cy, dw * 1.08, dh * 1.08, tiltFor(col, row))
-            ctx.stroke()
+            tech.beadOutline(selPath, cx, cy, dw * 1.08, dh * 1.08, tiltFor(col, row))
           }
         }
+        ctx.lineWidth = 2 / scale
+        ctx.strokeStyle = T.accent
+        ctx.stroke(selPath)
       }
 
       // live marquee rectangle
@@ -995,18 +1216,51 @@ export default function Home() {
         ctx.globalAlpha = 1
       }
     },
-    [viewport, view, geo, beads, layers, activeId, bg, bgT, bgShown, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing, tech]
+    [viewport, view, geo, beads, layers, activeId, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing, tech]
   )
   drawRef.current = drawScene // the rAF repaint path always uses the latest
 
-  // size the canvas to the viewport (never to the document)
+  // Overlay repaint: just the brush hover ghost, in the SAME document transform
+  // as the scene so it lands on the exact cells the brush would paint. Cheap, so
+  // it can fire on every pointer move and stay under the cursor.
+  const drawOverlay = useCallback(
+    (ctx) => {
+      const { w: vw, h: vh } = viewport
+      const { scale, tx, ty, rot } = view
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0)
+      ctx.clearRect(0, 0, vw, vh)
+      const hov = hoverRef.current
+      if (!hov.length || Bw * scale < 4) return // hidden when beads are tiny
+      const vcos = Math.cos(rot)
+      const vsin = Math.sin(rot)
+      ctx.setTransform(
+        DPR * scale * vcos, DPR * scale * vsin,
+        -DPR * scale * vsin, DPR * scale * vcos,
+        tx * DPR, ty * DPR
+      )
+      const drawScale = 1 + pack * (PACKED_DRAW - 1)
+      const dw = Bw * drawScale
+      const dh = Bh * drawScale
+      ctx.fillStyle = 'rgba(120,120,120,0.20)' // light grey, subtle
+      for (const { col, row } of hov) {
+        const { cx, cy } = geo.centerFor(col, row)
+        tech.beadPath(ctx, cx, cy, dw, dh, tiltFor(col, row))
+        ctx.fill()
+      }
+    },
+    [viewport, view, DPR, Bw, Bh, pack, geo, tech, tiltFor]
+  )
+  overlayDrawRef.current = drawOverlay
+
+  // size both canvases to the viewport (never to the document)
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    canvas.width = Math.max(1, Math.round(viewport.w * DPR))
-    canvas.height = Math.max(1, Math.round(viewport.h * DPR))
-    canvas.style.width = `${viewport.w}px`
-    canvas.style.height = `${viewport.h}px`
+    for (const canvas of [canvasRef.current, overlayRef.current]) {
+      if (!canvas) continue
+      canvas.width = Math.max(1, Math.round(viewport.w * DPR))
+      canvas.height = Math.max(1, Math.round(viewport.h * DPR))
+      canvas.style.width = `${viewport.w}px`
+      canvas.style.height = `${viewport.h}px`
+    }
   }, [viewport, DPR])
 
   // redraw whenever the scene changes
@@ -1014,6 +1268,12 @@ export default function Home() {
     const canvas = canvasRef.current
     if (canvas) drawScene(canvas.getContext('2d'))
   }, [drawScene])
+
+  // keep the ghost aligned when the view (zoom/pan/rotate) or size changes
+  useEffect(() => {
+    const canvas = overlayRef.current
+    if (canvas) drawOverlay(canvas.getContext('2d'))
+  }, [drawOverlay])
 
   // fit the document into the viewport, centred
   const fitView = useCallback(() => {
@@ -1061,7 +1321,7 @@ export default function Home() {
       const sx = e.clientX - r.left
       const sy = e.clientY - r.top
       // in image-adjust mode the wheel resizes the background image instead
-      if (bgAdjustRef.current) {
+      if (adjustIdRef.current) {
         imageZoomAtRef.current(e.deltaY < 0 ? 1.08 : 1 / 1.08, sx, sy)
         return
       }
@@ -1184,12 +1444,18 @@ export default function Home() {
   // Rebuild the design as (stroke-start state) + brush applied at each point.
   // Used to repaint the whole stroke as a clean line, or replay it freehand.
   const paintAlong = (base, points) => {
+    const alpha = alphaLockRef.current // recolour-only: no shape change (snap path)
     const next = new Map(base)
     for (const q of points) {
       for (const { col, row } of brushCells(q.x, q.y)) {
         const k = key(col, row)
-        if (tool === 'erase') next.delete(k)
-        else next.set(k, color)
+        if (tool === 'erase') {
+          if (alpha) continue // alpha lock: erasing would change shape
+          next.delete(k)
+        } else {
+          if (alpha && !next.has(k)) continue // only recolour existing beads
+          next.set(k, color)
+        }
       }
     }
     return next
@@ -1228,7 +1494,14 @@ export default function Home() {
 
   const onPointerDown = (e) => {
     e.preventDefault()
+    // Drop focus from any input (e.g. a canvas-size pill) the moment a stroke
+    // begins, so a following Ctrl/⌘+Z is our bead-undo and never a native
+    // text-undo that would revert the cm field and resize the canvas.
+    const ae = document.activeElement
+    if (ae && ae !== document.body && typeof ae.blur === 'function') ae.blur()
     canvasRef.current.setPointerCapture?.(e.pointerId)
+    // clear the hover ghost so it can't linger frozen on the overlay mid-drag
+    if (hoverRef.current.length) setHoverCells([])
     if (e.pointerType === 'touch') {
       if (dragging.current || marqueeRef.current) return // palm while pencil draws
       const p = ptFromEvent(e)
@@ -1241,7 +1514,7 @@ export default function Home() {
       dragging.current = false
       return
     }
-    if (bgAdjust || spaceHeld.current || e.button === 1) {
+    if (adjustLayer || spaceHeld.current || e.button === 1) {
       // image-adjust mode: any pen/mouse drag moves the image (see move handler)
       panning.current = { x: e.clientX, y: e.clientY }
       return
@@ -1258,7 +1531,7 @@ export default function Home() {
       setMarquee(marqueeRef.current)
       return
     }
-    if (!canEditRef.current) return // active layer hidden or locked — no painting
+    if (!canEditRef.current) { showToast(blockedRef.current()); return } // hidden/locked/non-bead layer
     dragging.current = true
     strokeBase.current = beadsRef.current // history: snapshot at stroke start
     strokeRef.current = { start: p, pts: [], locked: false, snapped: false, lastN: -1 }
@@ -1286,20 +1559,19 @@ export default function Home() {
         const my = (a.y + b.y) / 2
         const ang = Math.atan2(b.y - a.y, b.x - a.x)
         const g = pinchRef.current
-        if (bgAdjust) {
-          // image-adjust mode: the pinch resizes/moves the background image
+        if (adjustLayer) {
+          // image-adjust mode: the pinch resizes/moves the active image layer,
+          // keeping the doc point between the fingers pinned under the gesture
           const mPrev = screenToDoc(g.mx, g.my, view)
           const mNow = screenToDoc(mx, my, view)
-          setBgT((t) => {
-            const ns = clampNum(t.scale * (dist / g.dist), 0.2, 8)
-            const ff = ns / t.scale
-            const cx = geo.width / 2 + t.x
-            const cy = geo.height / 2 + t.y
-            return {
+          updateLayer(adjustLayer.id, (lay) => {
+            const ns = clampNum(lay.t.scale * (dist / g.dist), 0.05, 12)
+            const ff = ns / lay.t.scale
+            return { t: snapImageT({
               scale: ns,
-              x: mNow.x - (mPrev.x - cx) * ff - geo.width / 2,
-              y: mNow.y - (mPrev.y - cy) * ff - geo.height / 2,
-            }
+              x: mNow.x - (mPrev.x - lay.t.x) * ff,
+              y: mNow.y - (mPrev.y - lay.t.y) * ff,
+            }, lay.img) }
           })
         } else {
           setView((v) => {
@@ -1323,14 +1595,14 @@ export default function Home() {
       const dx = e.clientX - panning.current.x
       const dy = e.clientY - panning.current.y
       panning.current = { x: e.clientX, y: e.clientY }
-      if (bgAdjust && bg.type === 'image') {
+      if (adjustLayer) {
         // image-adjust mode: dragging moves the image, not the view (rotate the
         // screen delta into doc space so it follows the finger under rotation)
         const c = Math.cos(view.rot || 0)
         const s = Math.sin(view.rot || 0)
         const ddx = (c * dx + s * dy) / view.scale
         const ddy = (-s * dx + c * dy) / view.scale
-        setBgT((t) => ({ ...t, x: t.x + ddx, y: t.y + ddy }))
+        updateLayer(adjustLayer.id, (lay) => ({ t: snapImageT({ ...lay.t, x: lay.t.x + ddx, y: lay.t.y + ddy }, lay.img) }))
       } else {
         setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }))
       }
@@ -1350,8 +1622,20 @@ export default function Home() {
     }
     if (dragging.current) {
       handleStrokePoint(docFromEvent(e))
+      return
+    }
+    // idle hover over the canvas (mouse only): preview the brush footprint
+    if (e.pointerType === 'mouse' && !panning.current && !marqueeRef.current && !placeDrag.current) {
+      if ((tool === 'draw' || tool === 'erase') && canEditRef.current && !adjustIdRef.current) {
+        const p = docFromEvent(e)
+        setHoverCells(brushCells(p.x, p.y))
+      } else if (hoverRef.current.length) {
+        setHoverCells([])
+      }
     }
   }
+
+  const clearHover = () => { if (hoverRef.current.length) setHoverCells([]) }
 
   const endDrag = () => {
     if (marqueeRef.current) {
@@ -1398,7 +1682,7 @@ export default function Home() {
       tapRef.current = null
       pinchRef.current = null
       panning.current = null
-      if (allowTap && t && t.valid && !t.moved && Date.now() - t.t0 < 350 && !bgAdjust) {
+      if (allowTap && t && t.valid && !t.moved && Date.now() - t.t0 < 350 && !adjustIdRef.current) {
         if (t.maxN === 2) undo()
         else if (t.maxN === 3) redo()
       }
@@ -1480,77 +1764,64 @@ export default function Home() {
     setDragGhost(null)
   }
 
-  // ---- background image upload ----
-  const onBgImage = (file) => {
-    if (!file) return
-    // Read as a DATA URL (not a blob URL): data URLs survive save/reload, so the
-    // reference image is stored in the artwork and comes back when reopened.
-    const reader = new FileReader()
-    reader.onload = () => {
-      const dataUrl = reader.result
-      const img = new Image()
-      img.onload = () => {
-        bgImgRef.current = img
-        setBg((b) => ({ ...b, type: 'image', image: dataUrl }))
-        setBgT({ x: 0, y: 0, scale: 1 })
-        setBgShown(true)
-        setBgAdjust(true) // go straight into placing the reference design
-      }
-      img.src = dataUrl
-    }
-    reader.readAsDataURL(file)
-  }
 
   // ---- export (print-ready chart: outlined beads + guides + numbers + legend) ----
-  const chartBackground = () => {
-    if (exportBg === 'transparent') return { type: 'transparent' }
-    if (bg.type === 'image') {
-      // a hidden image exports as the solid colour, same as on screen
-      if (!bgShown || !bgImgRef.current) return { type: 'solid', color: bg.color }
-      // pass the placement as FRACTIONS of the doc size so the chart (which
-      // rasterises at a different pixel scale) reproduces the same alignment
-      return {
-        type: 'image',
-        img: bgImgRef.current,
-        t: { scale: bgT.scale, fx: bgT.x / geo.width, fy: bgT.y / geo.height },
-      }
-    }
-    return bg
-  }
-
-  // flatten the VISIBLE layers top-down into one Map — the single chart the
-  // artisan reads. Iterating bottom→top means the top layer's bead wins.
+  // flatten the VISIBLE bead layers top-down into one Map — used for the colour
+  // legend tally. Iterating bottom→top means the top layer's bead wins.
   const flattenVisible = () => {
     const m = new Map()
     for (const l of layersRef.current) {
-      if (!l.visible) continue
+      if (!l.visible || l.type !== 'bead') continue
       for (const [k, v] of l.beads) m.set(k, v)
     }
     return m
   }
 
+  // Ordered draw list for the chart: bg colour (on-screen export only), then
+  // visible image + bead layers in z-order, so images bake in exactly where they
+  // sit on screen and the top bead wins.
+  const chartComposite = () => {
+    const out = []
+    for (const l of layersRef.current) {
+      if (!l.visible) continue
+      if (l.type === 'bg') { if (exportBg === 'screen') out.push({ type: 'color', color: l.color }) }
+      else if (l.type === 'image') { if (l.img) out.push({ type: 'image', img: l.img, t: l.t, opacity: l.opacity }) }
+      else out.push({ type: 'beads', map: l.beads })
+    }
+    return out
+  }
+
   const exportPNG = () => {
     const flat = flattenVisible()
     const chart = renderFullChart({
-      beads: flat,
       cols,
       rows,
       tiltFor,
       tech,
       printBeadMm,
       beadRatio,
-      background: chartBackground(),
+      composite: chartComposite(),
+      srcDoc: { w: geo.width, h: geo.height }, // maps image placement → print px
       // match the on-screen packed look (same drawScale as drawScene)
       fillScale: 1 + pack * (PACKED_DRAW - 1),
     })
-    const legend = renderLegend(flat)
-    const gap = 24
+    // The chart canvas is a pure function of the canvas size (cols/rows/bead mm)
+    // — same canvas ⇒ same chart pixels. The colour legend USED to grow taller
+    // with the number of colours, which changed the total height (and, via the
+    // shared rasterScale below, even nudged the width by a pixel) so two frames
+    // of the same 30×30 canvas exported at different sizes and the animation
+    // staggered. Now we give the legend a FIXED band sized off the chart, so the
+    // whole export is byte-identical for a given canvas, whatever is drawn.
+    const gap = Math.round(6 * PX_PER_MM)
+    const legendH = Math.round(chart.width * 0.11)
+    const legend = renderLegend(flat, { width: chart.width, height: legendH })
     const out = document.createElement('canvas')
     // stacking chart + legend can exceed the browser canvas ceiling even when
     // the chart alone fits — past it drawing silently no-ops and the PNG saves
     // blank. Shrink the composite to stay inside (see rasterScale in chart.js).
-    const outW = Math.max(chart.width, legend.width)
-    const outH = chart.height + gap + legend.height
+    // outW/outH are now constant for a given canvas, so s is too.
+    const outW = chart.width
+    const outH = chart.height + gap + legendH
     const s = rasterScale(outW, outH)
     out.width = Math.ceil(outW * s)
     out.height = Math.ceil(outH * s)
@@ -1584,12 +1855,23 @@ export default function Home() {
   // one design = one plain object: this is what every save path (quick-save,
   // named slot, exported file) writes and what applyDesign reads back
   const designData = () => ({
-    version: 2, name: designName, technique: techniqueId, canvasCm, beadMM, palette, bg, bgT, bgShown, pack,
-    layers: layersRef.current.map((l) => ({
-      name: l.name, visible: l.visible, locked: l.locked, beads: [...l.beads.entries()],
-    })),
+    version: 3, name: designName, technique: techniqueId, canvasCm, beadMM, palette, pack,
+    layers: layersRef.current.map((l) => {
+      const base = { name: l.name, type: l.type || 'bead', visible: l.visible, locked: l.locked, alphaLock: l.alphaLock }
+      if (l.type === 'bg') return { ...base, color: l.color }
+      if (l.type === 'image') return { ...base, src: l.src, t: l.t, opacity: l.opacity }
+      return { ...base, beads: [...l.beads.entries()] }
+    }),
     activeIndex: Math.max(0, layersRef.current.findIndex((l) => l.id === activeIdRef.current)),
   })
+
+  // Load an image (data URL) into an existing image layer once it decodes.
+  const loadLayerImage = (id, src) => {
+    if (!src) return
+    const img = new Image()
+    img.onload = () => { updateLayer(id, { img }); requestRedraw() }
+    img.src = src
+  }
 
   // Apply a design object from any source (browser storage, a named slot, an
   // imported file). undoable: loading over current work goes on the undo stack;
@@ -1609,47 +1891,79 @@ export default function Home() {
       setBeadMM({ w: s.w, h: s.h })
     }
     if (Array.isArray(d.palette)) setPalette(d.palette)
-    // older saves may hold the removed on-screen transparent background
-    if (d.bg) setBg(d.bg.type === 'transparent' ? { ...d.bg, type: 'solid' } : d.bg)
-    // restore (or clear) the reference image: data-URL bg images are reloaded
-    // into bgImgRef so they draw; switching to a design without one clears the
-    // previous artwork's image so it can't linger on the canvas
-    if (d.bg && d.bg.type === 'image' && d.bg.image) {
-      const img = new Image()
-      img.onload = () => { bgImgRef.current = img; requestRedraw() }
-      img.src = d.bg.image
-    } else {
-      bgImgRef.current = null
-    }
-    if (d.bgT) setBgT(d.bgT)
-    if (typeof d.bgShown === 'boolean') setBgShown(d.bgShown)
     if (typeof d.pack === 'number') setPack(clampNum(d.pack, 0, 1))
     // older saves stored the Packed/Spaced toggle as a boolean; packed meant
     // the 1.15× touching look, which is 0.75 on today's wider slider
     else if (typeof d.packed === 'boolean') setPack(d.packed ? 0.75 : 0)
     if (typeof d.name === 'string') setDesignName(d.name)
-    // Build the layer stack: new saves carry `layers`; older single-Map saves
-    // and files migrate into one layer.
-    let nl = null
-    let activeIndex = 0
-    if (Array.isArray(d.layers) && d.layers.length) {
-      nl = d.layers.map((l) =>
-        makeLayer(
-          typeof l.name === 'string' ? l.name : 'Layer',
-          new Map(Array.isArray(l.beads) ? l.beads : [])
-        )
-      )
-      d.layers.forEach((l, i) => {
-        nl[i].visible = l.visible !== false
-        nl[i].locked = !!l.locked
-      })
-      activeIndex = clampNum(d.activeIndex || 0, 0, nl.length - 1)
-    } else if (Array.isArray(d.beads)) {
-      nl = [makeLayer('Layer 1', new Map(d.beads))]
+
+    // Build the layer stack. v3 layers carry a `type`; older saves (v2 bead-only
+    // layers + a global d.bg/d.bgT/d.bgShown, or a v1 single d.beads Map) migrate
+    // into the new model: a bottom bg-colour layer + an image layer per old
+    // reference image. Image bitmaps load async and fill in via loadLayerImage.
+    let nl = []
+    const pendingImages = [] // [id, src] to load after layersRef is set
+    const isV3 = Array.isArray(d.layers) && d.layers.some((l) => l.type)
+    if (isV3) {
+      for (const l of d.layers) {
+        if (l.type === 'bg') {
+          const lay = makeBgLayer(l.color || '#FFFFFF')
+          lay.name = l.name || 'Background'; lay.visible = l.visible !== false; lay.locked = !!l.locked
+          nl.push(lay)
+        } else if (l.type === 'image') {
+          const lay = makeImageLayer(l.src || null, null, l.t || { x: 0, y: 0, scale: 1 }, l.opacity == null ? 1 : l.opacity)
+          lay.name = l.name || 'Image'; lay.visible = l.visible !== false; lay.locked = !!l.locked
+          nl.push(lay)
+          if (l.src) pendingImages.push([lay.id, l.src])
+        } else {
+          const lay = makeLayer(l.name || 'Layer', new Map(Array.isArray(l.beads) ? l.beads : []))
+          lay.visible = l.visible !== false; lay.locked = !!l.locked; lay.alphaLock = !!l.alphaLock
+          nl.push(lay)
+        }
+      }
+    } else {
+      // --- migrate v1/v2 ---
+      const bgColor = (d.bg && d.bg.color) || '#FFFFFF'
+      nl.push(makeBgLayer(bgColor)) // background colour at the bottom
+      // old reference image → an image layer; convert its cover-fit placement to
+      // absolute doc px so it lands where it used to (best-effort).
+      if (d.bg && d.bg.type === 'image' && d.bg.image) {
+        const lay = makeImageLayer(d.bg.image, null, { x: 0, y: 0, scale: 1 }, 1)
+        lay.visible = d.bgShown !== false
+        const old = d.bgT || { x: 0, y: 0, scale: 1 }
+        const img = new Image()
+        img.onload = () => {
+          const docW = geo.width, docH = geo.height
+          const s = Math.max(docW / img.width, docH / img.height) * (old.scale || 1)
+          const t = { scale: s, x: (docW - img.width * s) / 2 + (old.x || 0), y: (docH - img.height * s) / 2 + (old.y || 0) }
+          updateLayer(lay.id, { img, t })
+          requestRedraw()
+        }
+        img.src = d.bg.image
+        nl.push(lay)
+      }
+      // bead layers (v2) or the single bead Map (v1)
+      if (Array.isArray(d.layers) && d.layers.length) {
+        for (const l of d.layers) {
+          const lay = makeLayer(l.name || 'Layer', new Map(Array.isArray(l.beads) ? l.beads : []))
+          lay.visible = l.visible !== false; lay.locked = !!l.locked; lay.alphaLock = !!l.alphaLock
+          nl.push(lay)
+        }
+      } else if (Array.isArray(d.beads)) {
+        nl.push(makeLayer('Layer 1', new Map(d.beads)))
+      }
     }
-    if (!nl) return false
+    // guarantee a bg layer at the bottom and at least one bead layer
+    if (!nl.length || nl[0].type !== 'bg') nl.unshift(makeBgLayer('#FFFFFF'))
+    if (!nl.some((l) => l.type === 'bead')) nl.push(makeLayer('Layer 1'))
+    if (!nl.length) return false
+
+    // active layer: prefer the saved index, but never the bg/image layer — fall
+    // back to the topmost bead layer so drawing works straight away.
+    let active = nl[clampNum(d.activeIndex || 0, 0, nl.length - 1)]
+    if (!active || active.type !== 'bead') active = [...nl].reverse().find((l) => l.type === 'bead')
+
     if (undoable) pushHistory(currentDoc())
-    const active = nl[activeIndex] || nl[0]
     layersRef.current = nl
     activeIdRef.current = active.id
     beadsRef.current = active.beads
@@ -1657,8 +1971,10 @@ export default function Home() {
     setLayers(nl)
     setActiveId(active.id)
     setBeads(active.beads)
+    setAdjustId(null)
     setSelection(new Set())
     setPlacing(null)
+    for (const [id, src] of pendingImages) loadLayerImage(id, src)
     return true
   }
 
@@ -1680,22 +1996,19 @@ export default function Home() {
   const resetDesign = (techId) => {
     setTechniqueId(techId)
     const l = makeLayer('Layer 1')
-    layersRef.current = [l]
+    const stack = [makeBgLayer('#FFFFFF'), l] // bg colour floor + one bead layer
+    layersRef.current = stack
     activeIdRef.current = l.id
     beadsRef.current = l.beads
     patternBaseRef.current = null
     undoStack.current = []
     redoStack.current = []
-    setLayers([l])
+    setLayers(stack)
     setActiveId(l.id)
     setBeads(l.beads)
     setSelection(new Set())
     setPlacing(null)
-    setBg({ type: 'solid', color: '#FFFFFF', image: null })
-    bgImgRef.current = null
-    setBgT({ x: 0, y: 0, scale: 1 })
-    setBgShown(true)
-    setBgAdjust(false)
+    setAdjustId(null)
   }
 
   // Create + open a new artwork (from the technique chooser). Auto-named from the
@@ -1710,12 +2023,13 @@ export default function Home() {
     setChooser(null)
     setScreen('editor')
     const rec = {
-      id, updatedAt: Date.now(), version: 2, name, technique: techId,
+      id, updatedAt: Date.now(), version: 3, name, technique: techId,
       canvasCm, beadMM, palette, pack,
-      bg: { type: 'solid', color: '#FFFFFF', image: null },
-      bgT: { x: 0, y: 0, scale: 1 }, bgShown: true,
-      layers: [{ name: 'Layer 1', visible: true, locked: false, beads: [] }],
-      activeIndex: 0,
+      layers: [
+        { name: 'Background', type: 'bg', visible: true, locked: false, alphaLock: false, color: '#FFFFFF' },
+        { name: 'Layer 1', type: 'bead', visible: true, locked: false, alphaLock: false, beads: [] },
+      ],
+      activeIndex: 1,
     }
     putArtwork(rec).catch(() => {})
     setArtworks((a) => [...a, summarize(rec)])
@@ -1829,15 +2143,20 @@ export default function Home() {
   useEffect(() => {
     if (screen !== 'editor' || !currentArtworkId) return
     clearTimeout(saveTimer.current)
+    // Serialising a dense design (every layer's beads → arrays) is heavy; on a
+    // big design back the debounce off so rapid edits don't churn memory and
+    // hammer IndexedDB on each stroke (iPad Safari memory pressure).
+    const total = layersRef.current.reduce((n, l) => n + (l.beads ? l.beads.size : 0), 0)
+    const delay = total > 40000 ? 1500 : 600
     saveTimer.current = setTimeout(() => {
       const rec = { id: currentArtworkId, updatedAt: Date.now(), ...designData() }
       putArtwork(rec)
         .then(() => setArtworks((a) => a.map((x) => (x.id === rec.id ? summarize(rec) : x))))
         .catch(() => {})
-    }, 600)
+    }, delay)
     return () => clearTimeout(saveTimer.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen, currentArtworkId, layers, canvasCm, beadMM, palette, bg, bgT, bgShown, pack, designName, techniqueId])
+  }, [screen, currentArtworkId, layers, canvasCm, beadMM, palette, pack, designName, techniqueId])
 
   // ---- one-time migration of the old localStorage designs into IndexedDB ----
   const migrateFromLocalStorage = async () => {
@@ -2021,61 +2340,8 @@ export default function Home() {
         </div>
 
         <div className="card">
-          <div className="cardTitle">Background</div>
-          <div className="segmented">
-            {[
-              ['solid', 'Colour'],
-              ['image', 'Image'],
-            ].map(([id, label]) => (
-              <button
-                key={id}
-                className={`seg ${bg.type === id ? 'on' : ''}`}
-                onClick={() => setBg((b) => ({ ...b, type: id }))}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {bg.type === 'solid' && (
-            <div className="colorTop" style={{ marginTop: 10 }}>
-              <input type="color" value={bg.color} onChange={(e) => setBg((b) => ({ ...b, color: e.target.value }))} className="bigSwatch" />
-              <Pill value={bg.color} label="hex" text onChange={(v) => setBg((b) => ({ ...b, color: v }))} />
-            </div>
-          )}
-          {bg.type === 'image' && (
-            <>
-              <label className="ghost fileBtn">
-                Choose image…
-                <input type="file" accept="image/png,image/jpeg" style={{ display: 'none' }} onChange={(e) => onBgImage(e.target.files[0])} />
-              </label>
-              {bg.image && (
-                <div className="pillRow">
-                  <button
-                    className="ghost half"
-                    onClick={() => {
-                      setBgShown((v) => !v)
-                      setBgAdjust(false) // hiding the image ends adjust mode
-                    }}
-                  >
-                    {bgShown ? 'Hide image' : 'Show image'}
-                  </button>
-                  <button
-                    className="ghost half"
-                    disabled={!bgShown}
-                    onClick={() => setBgAdjust((v) => !v)}
-                  >
-                    {bgAdjust ? 'Done' : 'Adjust'}
-                  </button>
-                </div>
-              )}
-              {!bgShown && (
-                <div className="colorTop" style={{ marginTop: 4 }}>
-                  <input type="color" value={bg.color} onChange={(e) => setBg((b) => ({ ...b, color: e.target.value }))} className="bigSwatch" />
-                  <Pill value={bg.color} label="hex" text onChange={(v) => setBg((b) => ({ ...b, color: v }))} />
-                </div>
-              )}
-            </>
-          )}
+          <div className="cardTitle">Background &amp; images</div>
+          <div className="hint">The background colour and reference images are now layers. Open the <strong>Layers</strong> panel (right of the canvas) to set the background colour, add a photo to trace, or hide the background for transparency.</div>
         </div>
         </div>
 
@@ -2093,7 +2359,10 @@ export default function Home() {
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerCancel}
+            onPointerLeave={clearHover}
           />
+          {/* hover ghost lives here so it repaints without redrawing the scene */}
+          <canvas ref={overlayRef} className="overlay" />
           {/* floating tool strip — right edge, under a right-handed iPad user's
               hand (locked iPad-pass decision #4). Big ≥44px touch targets. */}
           <div className="toolStrip">
@@ -2128,69 +2397,118 @@ export default function Home() {
             <div className="layersPanel">
               <div className="layersHead">
                 <span>LAYERS</span>
-                <button className="lpAdd" onClick={addLayer} title="New layer">+</button>
+                <div className="lpHeadBtns">
+                  <label className="lpAdd lpImg" title="Add reference image">
+                    <IconImage />
+                    <input type="file" accept="image/png,image/jpeg" style={{ display: 'none' }} onChange={(e) => { addImageLayer(e.target.files[0]); e.target.value = '' }} />
+                  </label>
+                  <button className="lpAdd" onClick={addLayer} title="New bead layer">+</button>
+                </div>
               </div>
               <div className="layersList">
                 {/* top of the stack shows first (array is bottom→top) */}
                 {[...layers].reverse().map((l) => (
                     <div
                       key={l.id}
-                      className={`layerRow ${l.id === activeId ? 'on' : ''}`}
+                      className={`layerRow ${l.id === activeId ? 'on' : ''} ${l.id === adjustId ? 'adjusting' : ''}`}
                       onClick={() => switchLayer(l.id)}
                     >
                       <button
                         className="lpEye"
                         onClick={(e) => { e.stopPropagation(); toggleVisible(l.id) }}
-                        title={l.visible ? 'Hide layer' : 'Show layer'}
+                        title={l.visible ? (l.type === 'bg' ? 'Hide background (transparent)' : 'Hide layer') : 'Show layer'}
                       >
                         {l.visible ? <IconEye /> : <IconEyeOff />}
                       </button>
+                      {l.type === 'bg' && (
+                        <input
+                          type="color"
+                          className="lpSwatch"
+                          value={l.color}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setBgColor(e.target.value)}
+                          title="Background colour"
+                        />
+                      )}
                       <span
                         className="lpName"
                         onDoubleClick={() => {
+                          if (l.type === 'bg') return
                           const name = window.prompt('Rename layer:', l.name)
                           if (name !== null) renameLayer(l.id, name.trim() || l.name)
                         }}
-                        title="Double-click to rename"
+                        title={l.type === 'bg' ? 'Background colour' : 'Double-click to rename'}
                       >
                         {l.name}
                         {l.locked && <em className="lpLockTag">locked</em>}
+                        {l.alphaLock && <em className="lpLockTag">α</em>}
                       </span>
-                      <span className="lpCount">{l.beads.size}</span>
-                      <button
-                        className="lpLock"
-                        onClick={(e) => { e.stopPropagation(); toggleLock(l.id) }}
-                        title={l.locked ? 'Unlock layer' : 'Lock layer'}
-                      >
-                        {l.locked ? <IconLock /> : <IconUnlock />}
-                      </button>
+                      {l.type === 'image' ? (
+                        <button
+                          className={`lpAdjust ${l.id === adjustId ? 'on' : ''}`}
+                          onClick={(e) => { e.stopPropagation(); switchLayer(l.id); setAdjustId(l.id === adjustId ? null : l.id) }}
+                          disabled={l.locked || !l.visible}
+                          title="Move / resize this image on the canvas"
+                        >{l.id === adjustId ? 'Done' : 'Adjust'}</button>
+                      ) : l.type === 'bead' ? (
+                        <span className="lpCount">{l.beads.size}</span>
+                      ) : null}
+                      {l.type !== 'bg' && (
+                        <button
+                          className="lpLock"
+                          onClick={(e) => { e.stopPropagation(); toggleLock(l.id) }}
+                          title={l.locked ? 'Unlock layer' : 'Lock layer'}
+                        >
+                          {l.locked ? <IconLock /> : <IconUnlock />}
+                        </button>
+                      )}
                     </div>
                 ))}
               </div>
+              {activeLayer?.type === 'image' && (
+                <div className="lpOpacity">
+                  <span className="brushLabel">Opacity</span>
+                  <input
+                    className="slider"
+                    type="range" min="0.1" max="1" step="0.05"
+                    value={activeLayer.opacity == null ? 1 : activeLayer.opacity}
+                    onChange={(e) => updateLayer(activeLayer.id, { opacity: +e.target.value })}
+                  />
+                </div>
+              )}
               <div className="layerActions">
                 {(() => {
                   const i = layers.findIndex((l) => l.id === activeId)
+                  const t = activeLayer?.type
+                  const isBead = t === 'bead' || t == null
                   return (
                     <>
-                      <button onClick={() => duplicateLayer(activeId)} title="Duplicate active layer">Dup</button>
-                      <button onClick={() => mergeDown(activeId)} disabled={i <= 0} title="Merge active layer down">Merge↓</button>
-                      <button onClick={() => moveLayer(activeId, 1)} disabled={i >= layers.length - 1} title="Move up">↑</button>
-                      <button onClick={() => moveLayer(activeId, -1)} disabled={i <= 0} title="Move down">↓</button>
-                      <button onClick={() => deleteLayer(activeId)} disabled={layers.length <= 1} title="Delete active layer">Del</button>
+                      <button onClick={() => duplicateLayer(activeId)} disabled={t === 'bg'} title="Duplicate active layer">Dup</button>
+                      <button onClick={() => mergeDown(activeId)} disabled={!isBead || layers[i - 1]?.type !== 'bead'} title="Merge active layer down">Merge↓</button>
+                      <button
+                        className={activeLayer?.alphaLock ? 'on' : ''}
+                        onClick={() => toggleAlphaLock(activeId)}
+                        disabled={!isBead}
+                        title="Alpha lock — recolour existing beads only"
+                      >α</button>
+                      <button onClick={() => moveLayer(activeId, 1)} disabled={t === 'bg' || i >= layers.length - 1} title="Move up">↑</button>
+                      <button onClick={() => moveLayer(activeId, -1)} disabled={t === 'bg' || i <= 1} title="Move down">↓</button>
+                      <button onClick={() => deleteLayer(activeId)} disabled={t === 'bg'} title="Delete active layer">Del</button>
                     </>
                   )
                 })()}
               </div>
-              <div className="lpHint">Top layer wins where beads overlap. Export flattens visible layers.</div>
+              <div className="lpHint">Background is the bottom layer — hide it for a transparent canvas. Add images to trace; top layer wins where beads overlap.</div>
             </div>
           )}
           {/* image-adjust mode banner */}
-          {bgAdjust && (
+          {adjustLayer && (
             <div className="adjustBar">
-              <span>ADJUST IMAGE — DRAG TO MOVE · PINCH / SCROLL TO RESIZE</span>
-              <button onClick={() => setBgAdjust(false)}>DONE</button>
+              <span>ADJUST IMAGE — DRAG TO MOVE · PINCH / SCROLL TO RESIZE · SNAPS TO EDGES</span>
+              <button onClick={() => setAdjustId(null)}>DONE</button>
             </div>
           )}
+          {toast && <div className="toast" key={toast}>{toast}</div>}
           <div className="zoomCtl">
             <button onClick={undo} title="Undo — 2-finger tap or Ctrl+Z">↶</button>
             <button onClick={redo} title="Redo — 3-finger tap or Ctrl+Shift+Z">↷</button>
@@ -2478,6 +2796,11 @@ export default function Home() {
         }
         .board { display: block; touch-action: none; cursor: crosshair; }
         .board.grab { cursor: grab; }
+        /* ghost overlay sits exactly over the board; clicks pass through to it */
+        .overlay {
+          position: absolute; top: 0; left: 0;
+          pointer-events: none; touch-action: none;
+        }
         .zoomCtl {
           position: absolute; left: 14px; bottom: 14px;
           display: flex; align-items: center; gap: 2px;
@@ -2546,11 +2869,33 @@ export default function Home() {
           font-family: ${T.mono}; font-size: 10px; letter-spacing: 0.12em;
           color: ${T.inkSoft}; padding: 2px 4px 8px;
         }
+        .lpHeadBtns { display: flex; gap: 6px; align-items: center; }
         .lpAdd {
           border: none; background: ${T.pill}; color: ${T.ink}; cursor: pointer;
           width: 24px; height: 24px; border-radius: 6px; font-size: 17px; line-height: 1;
+          display: flex; align-items: center; justify-content: center; padding: 0;
         }
         .lpAdd:hover { background: #242424; }
+        .lpImg { font-size: 0; }
+        .lpSwatch {
+          flex-shrink: 0; width: 20px; height: 20px; padding: 0; border: 1px solid ${T.line};
+          border-radius: 5px; background: none; cursor: pointer;
+        }
+        .lpSwatch::-webkit-color-swatch-wrapper { padding: 0; }
+        .lpSwatch::-webkit-color-swatch { border: none; border-radius: 4px; }
+        .lpAdjust {
+          flex-shrink: 0; border: none; background: ${T.pill}; color: ${T.inkSoft};
+          cursor: pointer; border-radius: 6px; padding: 4px 7px;
+          font-family: ${T.mono}; font-size: 9px; letter-spacing: 0.04em;
+        }
+        .lpAdjust:hover { color: ${T.ink}; }
+        .lpAdjust.on { background: ${T.ink}; color: ${T.bg}; }
+        .lpAdjust:disabled { opacity: 0.3; cursor: not-allowed; }
+        .layerRow.adjusting { border-color: ${T.accent}; }
+        .lpOpacity {
+          display: flex; align-items: center; gap: 8px; padding: 8px 4px 2px;
+          margin-top: 6px; border-top: 1px solid ${T.line};
+        }
         .layersList {
           display: flex; flex-direction: column; gap: 4px;
           overflow-y: auto; -webkit-overflow-scrolling: touch; min-height: 0;
@@ -2586,6 +2931,7 @@ export default function Home() {
         }
         .layerActions button:hover { background: #242424; }
         .layerActions button:disabled { opacity: 0.3; cursor: not-allowed; }
+        .layerActions button.on { background: ${T.ink}; color: ${T.bg}; }
         .lpHint { font-family: ${T.mono}; font-size: 8.5px; color: ${T.inkSoft};
           line-height: 1.5; padding: 8px 4px 2px; }
 
@@ -2595,6 +2941,19 @@ export default function Home() {
           border-radius: ${T.radius}px; padding: 8px 10px;
           font-family: ${T.mono}; font-size: 9px; letter-spacing: 0.04em;
           color: ${T.ink}; line-height: 1.5;
+        }
+        .toast {
+          position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%);
+          background: #1b1b1b; border: 1px solid ${T.accent};
+          border-radius: ${T.radius}px; padding: 9px 14px; max-width: 80%;
+          font-family: ${T.mono}; font-size: 10px; letter-spacing: 0.04em;
+          color: ${T.ink}; text-align: center; pointer-events: none; z-index: 40;
+          box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+          animation: toastIn 0.18s ease-out;
+        }
+        @keyframes toastIn {
+          from { opacity: 0; transform: translate(-50%, 6px); }
+          to { opacity: 1; transform: translate(-50%, 0); }
         }
         .stageInfo {
           flex-shrink: 0; color: ${T.inkSoft}; font-size: 10px; font-family: ${T.mono};
@@ -2891,6 +3250,16 @@ function IconUnlock() {
       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="11" width="18" height="11" rx="2" />
       <path d="M7 11V7a5 5 0 019.9-1" />
+    </svg>
+  )
+}
+function IconImage() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <path d="M21 15l-5-5L5 21" />
     </svg>
   )
 }

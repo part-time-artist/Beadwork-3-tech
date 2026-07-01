@@ -146,7 +146,7 @@ function paintImageBackground(ctx, W, H, img, t = { scale: 1, fx: 0, fy: 0 }) {
 // canvas. A margin on the top/left holds the edge numbers. Returns the canvas.
 export function renderFullChart({
   beads, cols, rows, tiltFor, tech, printBeadMm = 8, beadRatio = 1.25,
-  background, guides = true, numbers = true, every = GUIDE_EVERY, fillScale = 1,
+  background, composite, srcDoc, guides = true, numbers = true, every = GUIDE_EVERY, fillScale = 1,
 }) {
   tech = tech || getTechnique('3bead')
   const geo = makePrintGeo({ cols, rows, printBeadMm, beadRatio, tech })
@@ -161,15 +161,35 @@ export function renderFullChart({
   canvas.height = Math.ceil(H * scale)
   const ctx = canvas.getContext('2d')
   ctx.scale(scale, scale)
-  if (background && background.type === 'solid') {
+  if (!composite && background && background.type === 'solid') {
     ctx.fillStyle = background.color
     ctx.fillRect(0, 0, W, H)
   }
   ctx.translate(margin, margin)
-  if (background && background.type === 'image' && background.img) {
-    paintImageBackground(ctx, geo.width, geo.height, background.img, background.t)
+  if (composite) {
+    // Ordered layers (bg colour / reference images / bead Maps). Image placement
+    // arrives in source-doc (screen) pixels; f maps it to the print pixel scale.
+    const f = srcDoc && srcDoc.w ? geo.width / srcDoc.w : 1
+    for (const item of composite) {
+      if (item.type === 'color') {
+        ctx.fillStyle = item.color
+        ctx.fillRect(0, 0, geo.width, geo.height)
+      } else if (item.type === 'image' && item.img) {
+        ctx.save()
+        ctx.beginPath(); ctx.rect(0, 0, geo.width, geo.height); ctx.clip()
+        ctx.globalAlpha = item.opacity == null ? 1 : item.opacity
+        ctx.drawImage(item.img, item.t.x * f, item.t.y * f, item.img.width * item.t.scale * f, item.img.height * item.t.scale * f)
+        ctx.restore()
+      } else if (item.type === 'beads') {
+        drawBeads(ctx, { geo, beads: item.map, cols, rows, tiltFor, tech, fillScale })
+      }
+    }
+  } else {
+    if (background && background.type === 'image' && background.img) {
+      paintImageBackground(ctx, geo.width, geo.height, background.img, background.t)
+    }
+    drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech, fillScale })
   }
-  drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech, fillScale })
   if (guides) drawGuides(ctx, { geo, cols, rows, every })
   if (numbers) drawNumbers(ctx, { geo, cols, rows, every, mode: 'margin' })
   return canvas
@@ -185,33 +205,57 @@ export function tallyColors(beads) {
 }
 
 // Render the legend (swatch + hex + total count per colour) to its own canvas.
-export function renderLegend(beads, { scale = PX_PER_MM } = {}) {
+//
+// `width`/`height` (px) FIX the output size: when the caller passes them (the
+// PNG export does, derived from the chart — which is constant for a given canvas
+// size) the legend is a fixed band and colours FLOW into columns instead of the
+// canvas growing taller with each extra colour. That is what makes every export
+// of the same canvas pixel-identical (needed for frame-by-frame animation).
+// Omit them (PDF path) and it falls back to the old single-column auto-height.
+export function renderLegend(beads, { scale = PX_PER_MM, width, height } = {}) {
   const tally = tallyColors(beads)
   const pad = 6 * scale
-  const rowH = 9 * scale
+  const baseRowH = 9 * scale
   const sw = 7 * scale
-  const W = Math.ceil(70 * scale)
-  const H = Math.ceil(pad * 2 + (tally.length + 1) * rowH)
+  const colW = 70 * scale
+  const headerH = baseRowH
+  const W = Math.ceil(width || colW)
+  const H = Math.ceil(height || pad * 2 + (tally.length + 1) * baseRowH)
   const canvas = document.createElement('canvas')
   canvas.width = W
   canvas.height = H
   const ctx = canvas.getContext('2d')
   ctx.fillStyle = '#FFFFFF'
   ctx.fillRect(0, 0, W, H)
+
+  // How many rows fit per column; wrap into more columns as needed, and only if
+  // the colours still don't fit the fixed band do we shrink the row height — so
+  // the layout always fits the band exactly (size stays constant either way).
+  const availH = H - pad * 2 - headerH
+  const maxCols = Math.max(1, Math.floor((W - pad) / colW))
+  let rowH = baseRowH
+  let rowsPerCol = Math.max(1, Math.floor(availH / rowH))
+  if (rowsPerCol * maxCols < tally.length) {
+    rowsPerCol = Math.ceil(tally.length / maxCols)
+    rowH = availH / rowsPerCol
+  }
+  const swat = Math.min(sw, rowH * 0.8)
+
   ctx.fillStyle = '#2E2B26'
   ctx.font = `700 ${4.6 * scale}px -apple-system, 'Segoe UI', sans-serif`
   ctx.textBaseline = 'middle'
-  ctx.fillText('Colour key', pad, pad + rowH / 2)
-  ctx.font = `500 ${4 * scale}px -apple-system, 'Segoe UI', sans-serif`
+  ctx.fillText('Colour key', pad, pad + headerH / 2)
+  ctx.font = `500 ${Math.min(4 * scale, rowH * 0.5)}px -apple-system, 'Segoe UI', sans-serif`
   tally.forEach((t, i) => {
-    const y = pad + (i + 1) * rowH + rowH / 2
+    const x = pad + Math.floor(i / rowsPerCol) * colW
+    const y = pad + headerH + (i % rowsPerCol) * rowH + rowH / 2
     ctx.fillStyle = t.color
     ctx.strokeStyle = C.filledOutline
     ctx.lineWidth = 1
-    ctx.fillRect(pad, y - sw / 2, sw, sw)
-    ctx.strokeRect(pad, y - sw / 2, sw, sw)
+    ctx.fillRect(x, y - swat / 2, swat, swat)
+    ctx.strokeRect(x, y - swat / 2, swat, swat)
     ctx.fillStyle = '#2E2B26'
-    ctx.fillText(`${t.color}   ×${t.count}`, pad + sw + 4 * scale, y)
+    ctx.fillText(`${t.color}   ×${t.count}`, x + swat + 4 * scale, y)
   })
   return canvas
 }

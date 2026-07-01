@@ -456,3 +456,87 @@ IMPLEMENTED 2026-06-15:
 - App height **100dvh** (100vh hid the bottom buttons behind iPad Safari chrome).
 - `Pill` inputs edit a local draft while focused, so the field can be cleared
   to retype (canvas cm fields were impossible to edit); hex text fits (14px).
+
+## Fixes + layers pass (grilling 2026-06-30)
+Seven items. LOCKED:
+1. **Undo bug (laptop).** Ctrl/⌘+Z currently bails unless `e.target ===
+   document.body`; after clicking a canvas-size Pill, focus stays on the input,
+   so our undo never runs and the browser's NATIVE text-undo reverts the cm
+   field → canvas resizes (the reported symptom). FIX: fire undo from the canvas
+   regardless of focus and `preventDefault` so native input-undo can't resize.
+   Canvas size stays OUT of undo history ("locked in" — already true).
+2. **Background → layers (Procreate model).** Remove the separate Background
+   card. The bottom layer becomes a real **Background layer = solid colour**,
+   shown in the layers panel; **hiding it = transparent background** (screen
+   checker + export alpha). It is pinned to the bottom, recolourable, hideable,
+   NOT deletable/reorderable. **Image layers** stack ABOVE it: you can add
+   **multiple** reference images, each a layer with show/hide/lock/reorder/
+   delete + place & resize (Adjust mode) + opacity (for tracing). Image layers
+   are not bead layers — you can't paint beads on one (drawing while an image
+   layer is active triggers the locked/blocked feedback, see #4).
+   **Export: visible image layers bake into the PNG** (flatten top-down like
+   beads); hide a layer to leave it out of the artisan chart.
+3. **Image stays FIXED on canvas resize.** Changing canvas cm no longer
+   cover-fits/rescales a placed image; it keeps its size & position. Plus:
+   while resizing/moving an image in Adjust mode, **snap its edges/corners to
+   the canvas edges/corners** within a small threshold.
+4. **Locked/hidden-layer feedback.** Trying to paint on a locked OR hidden layer
+   (or an image layer) shows a brief toast/banner ("Layer is locked" / "hidden"
+   / "image layer — can't draw beads here") instead of silently doing nothing.
+5. **Alpha lock** (per layer). Toggle: drawing only RECOLOURS beads already on
+   that layer — can't add to empty cells or change shape. (Not clipping mask /
+   layer mask.) Chosen as the simplest fit for one-solid-bead-per-node.
+6. **Brush hover preview (desktop).** On hover, tint the beads the current brush
+   size would paint (grey ghost) so the user sees the footprint before clicking.
+   Desktop pointer only (Pencil/touch have no hover).
+7. **iPad Safari crash = memory, grows with bead count** ("any size + lots of
+   beads"). Investigate + reduce: undo-history footprint, per-layer Maps,
+   offscreen lattice/canvases, image data-URL weight. Profile, don't guess.
+
+Defaults taken (change if wrong): image layers default 100% opacity (dimmable);
+bead layers keep no opacity (one solid colour); alpha-lock is a separate per-row
+toggle distinct from position-lock; Background layer can't be alpha-locked.
+
+IMPLEMENTED 2026-06-30 (`src/App.jsx`, `src/lib/chart.js`):
+- #1 Undo: keydown guard now skips only editable inputs (not "anything but
+  body"); canvas `onPointerDown` blurs any focused input so native text-undo
+  can't fire. Canvas size still never enters undo.
+- #4 Toast: transient `toast` state + `showToast`; `blockedReason()` returns the
+  reason (locked / hidden / image / bg) and is shown on a blocked draw or fill.
+- #6 Hover: `hoverRef` holds the brush footprint cells; `onPointerMove` (mouse
+  only, idle) sets it via `setHoverCells`, drawScene ghosts them grey. Cleared on
+  pointer-leave + tool/edit change.
+- #5 Alpha lock: `alphaLock` per layer + `alphaLockRef`; paintBrush, floodFill
+  AND `paintAlong` (the straight-line snap path — initially missed, found in
+  verification) skip empty cells and erase when set. α toggle in layer actions.
+- #2/#3 Layers model: layer `type` ∈ {'bead','image','bg'}. `makeBgLayer`/
+  `makeImageLayer`; fresh stack = [bg, Layer 1]. drawScene composites visible
+  layers in z-order (bg base → images/beads → empty-cell outlines once on top).
+  Image placement `t={x,y,scale}` in DOC px (fixed on canvas resize) + edge/
+  corner snap (`snapImageT`). Adjust routed by `adjustId` (replaces `bgAdjust`).
+  Layer ops guard bg (pinned bottom, no delete/move/merge) and keep ≥1 bead
+  layer. Background card removed → "Background & images" pointer card; add-image
+  button + bg colour swatch + per-image Adjust/opacity live in the layers panel.
+  Export builds an ordered `composite` (chart.js `renderFullChart` gained a
+  `composite`/`srcDoc` path) so visible images bake into the PNG in z-order.
+- Save format **v3**: layers carry `type` (+ color / src+t+opacity / beads).
+  `applyDesign` migrates v1 (single beads) and v2 (bead layers + global
+  bg/bgT/bgShown) into bg-layer + image-layer(s); old cover-fit placement is
+  converted to absolute doc px on image load.
+- Verified: `scripts/fixespass.mjs` (fresh = Background+Layer 1, bg-draw toast,
+  hide-bg no crash), `scripts/imglayer.mjs` (add image → Image layer + Adjust,
+  PNG bakes the image).
+- #7 iPad memory (crash grows with bead count). Three mitigations:
+  1. **In-place stroke painting.** `paintBrush` mutated the WHOLE bead Map on
+     every pointer event (240Hz) — on a dense canvas that allocation churn is
+     what killed the tab. Now it clones the active Map ONCE per stroke (lazily,
+     on the first real change vs `strokeBase`) and mutates that private copy in
+     place; undo is unaffected (strokeBase untouched; an all-no-op stroke never
+     clones so it commits nothing). The straight-line snap path is unchanged.
+  2. **Reference images downscaled** to ≤2400px longest side (`MAX_IMG_SIDE`) +
+     re-encoded JPEG before storing, so a full-res phone photo can't decode to
+     tens of MB per artwork in memory + IndexedDB.
+  3. **Adaptive autosave debounce** — 1500ms (vs 600ms) once a design exceeds
+     ~40k beads, so serialising every layer's beads doesn't run on every stroke.
+  Verified `scripts/drawundo.mjs` (freehand draw→undo→redo bead counts correct).
+  Still wants an on-device iPad retest to confirm the crash is gone.

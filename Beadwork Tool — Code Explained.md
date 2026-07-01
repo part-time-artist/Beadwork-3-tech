@@ -148,7 +148,11 @@ In the real weave, beads press against each other — almost no background shows
 
 ### `drawScene` — the painter
 
-Runs every time anything changes, in order: background (colour/image/checkerboard) → **only the beads currently visible** (off-screen beads are skipped — "culling") → selection rings → the dashed marquee rectangle. When zoomed far out it draws simple rectangles instead of detailed ovals ("level of detail") so even huge designs stay fast.
+Runs every time anything changes, in order: background (colour/image/checkerboard) → **only the beads currently visible** (off-screen beads are skipped — "culling") → the empty-cell grid outlines → selection rings → the dashed marquee rectangle. When zoomed far out it draws simple rectangles instead of detailed ovals ("level of detail") so even huge designs stay fast.
+
+> **Batched drawing (the big speed fix).** Telling the canvas to "fill this oval" is a slow instruction — it has cost *per call*, no matter how tiny the oval. The first version called it **once per bead**, so a 30×30 cm design fully on screen fired *tens of thousands* of fill/stroke calls on every single repaint (every pan, zoom, and stroke) — that was the lag. Now we **collect** all the empty ovals into one shape (`Path2D`) and fill + outline the whole grid in **just two calls**, and we collect the coloured beads **by colour** so each colour is one fill. Same picture, a few dozen calls instead of tens of thousands. The bead shape is added to the shared shape by `appendBead` (`geometry.js`) / `tech.beadOutline`, the batch-friendly cousin of `beadPath`. **"Ask the slow thing to do a lot at once, not a little many times"** is a core performance idea.
+
+> **The hover ghost has its own canvas.** The faint grey preview of where your brush would paint used to be drawn *inside* `drawScene`, so moving the mouse forced a full repaint of the whole grid and the ghost trailed a few frames behind the cursor like a train. It now lives on a **second, transparent canvas stacked exactly over the main one** (`overlayRef` / `drawOverlay`). Moving the mouse repaints only that thin overlay — a handful of ovals — so the ghost sticks to the cursor. Clicks pass straight through it (`pointer-events: none`).
 
 ### Painting tools
 
@@ -247,10 +251,11 @@ Procreate's paint. Where two visible layers both fill the same bead node, the
 - **Undo** now remembers the *whole stack* at each step (it was just one Map
   before). So undo reverses both bead strokes and layer actions like add/delete/
   merge. Cheap, because unchanged layers are shared, not copied.
-- **Drawing the screen** (`drawScene`) walks the visible layers top-to-bottom
-  per bead and draws the first colour it finds (`fillAt`). **Export**
-  (`flattenVisible`) squashes the visible layers into one Map → the single chart
-  the artisan reads.
+- **Drawing the screen** (`drawScene`) draws the visible layers bottom-to-top so
+  the top layer's bead wins where they overlap, and remembers which cells ended up
+  filled (in `filledCells`) so the empty-grid pass knows which ovals to skip.
+  **Export** (`flattenVisible`) squashes the visible layers into one Map → the
+  single chart the artisan reads.
 - **Saving** now stores `layers` + which one was active; old saves with a single
   `beads` list are auto-converted into one layer when opened.
 - A layer that's **hidden or locked** can't be drawn on (a small note appears,
@@ -403,7 +408,10 @@ there when you reopen — it used to vanish.
 - Multi-finger tap feel → the `350` ms / `12` px thresholds in `onPointerMove`/`liftTouch`, `App.jsx`
 - Zoom limits → the `0.02, 8` clamps in `zoomAt` and the pinch handler
 - Rotation snap angle → the `0.12` (radians ≈ 7°) in `snapRotation`, `App.jsx`
-- Layer compositing (who wins on overlap) → `fillAt` in `drawScene`, `App.jsx`
+- Layer compositing (who wins on overlap) → the bottom-to-top layer loop in `drawScene`, `App.jsx`
+- Hover-ghost colour / darkness → the `rgba(...)` fill in `drawOverlay`, `App.jsx`
+- Bead-grid draw speed (batching) → `appendBead` in `geometry.js` / `tech.beadOutline`
+- Exported-PNG size consistency → `legendH` in `exportPNG` (`App.jsx`) + the fixed-band `renderLegend` in `chart.js`
 - What export includes → `flattenVisible` in `App.jsx`
 - New-layer name / where it inserts → `addLayer` in `App.jsx`
 - Layers panel look → the `.layersPanel` styles in `App.jsx`
