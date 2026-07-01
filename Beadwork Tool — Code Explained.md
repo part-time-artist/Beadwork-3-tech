@@ -415,3 +415,24 @@ there when you reopen — it used to vanish.
 - What export includes → `flattenVisible` in `App.jsx`
 - New-layer name / where it inserts → `addLayer` in `App.jsx`
 - Layers panel look → the `.layersPanel` styles in `App.jsx`
+- Clear one layer's beads → the **Clear** button in `layerActions` → `clearCanvas`, `App.jsx`
+- Tap-canvas-collapses-layers → the `if (showLayers)` guard at the top of `onPointerDown`, `App.jsx`
+- Drag the current colour onto the canvas → `onBigSwatchUp` + the `.bigSwatch` button, `App.jsx`
+
+### iPad Safari memory (why the tab used to crash)
+
+iPad Safari kills a tab the instant its memory crosses a hidden ceiling — no
+warning, it just vanishes. On a big canvas (a 20×15 cm design at 1.5 mm beads is
+~11,000 cells) the memory quietly climbs until any extra stroke tips it over.
+Four guards keep it under the line:
+
+- **Hover ghost is mouse-only.** The extra full-screen overlay canvas is never
+  created on touch screens (`canHover` via `matchMedia('(hover: hover)')`) — on
+  iPad it was ~15–20 MB of retina canvas doing nothing.
+- **Undo history shrinks as the canvas grows** (`historyCaps` in `App.jsx`): ~50
+  steps on small designs, ~15 on large ones, with a matching bead budget. You
+  rarely undo more than a few steps, so this is nearly free in practice.
+- **Render resolution capped** at 2× (`DPR`) so a canvas can't allocate beyond
+  twice its on-screen pixels.
+- **Recent colours persist** to `localStorage` (`RECENT_KEY`), so even if the tab
+  is killed your recent colours come back on reload.

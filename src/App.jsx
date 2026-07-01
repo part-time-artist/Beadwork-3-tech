@@ -32,6 +32,7 @@ const T = {
 const STORAGE_KEY = 'beadwork3_palettes_v1'
 const DESIGN_KEY = 'beadwork3_design_v1'
 const DESIGNS_KEY = 'beadwork3_designs_v1' // named design slots
+const RECENT_KEY = 'beadwork3_recent_v1' // recently used colours (survives a crash/reload)
 
 // Default preset: the user's own 5 colours (2026-06-11) — soft pink,
 // chartreuse, sky blue, bone, deep violet. (Bead colours may be rich; only
@@ -187,12 +188,19 @@ export default function Home() {
   const [color, setColor] = useState('#F3CEDE') // starts on the palette's pink
   const [pack, setPack] = useState(0.75) // 0 = spaced (true size) … 1 = max packed; 0.75 ≈ touching
   const [brush, setBrush] = useState(1) // brush radius in beads
-  const [recentColors, setRecentColors] = useState([]) // up to 5 recently used
+  const [recentColors, setRecentColors] = useState(() => {
+    // seed from localStorage so a crash/reload keeps your recent colours
+    try { const r = localStorage.getItem(RECENT_KEY); return r ? JSON.parse(r) : [] } catch (e) { return [] }
+  }) // up to 5 recently used
   const [selection, setSelection] = useState(() => new Set()) // selected bead keys
   const [marquee, setMarquee] = useState(null) // live select rectangle (doc coords)
 
   const pushRecent = useCallback((c) => {
-    setRecentColors((prev) => [c, ...prev.filter((x) => x !== c)].slice(0, 5))
+    setRecentColors((prev) => {
+      const next = [c, ...prev.filter((x) => x !== c)].slice(0, 5)
+      try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)) } catch (e) {}
+      return next
+    })
   }, [])
 
   // Transient toast (e.g. "layer is locked"); auto-clears after a moment.
@@ -310,15 +318,25 @@ export default function Home() {
 
   // History is capped by TOTAL stored beads (across all layers) as well as
   // steps: 50 snapshots of a dense full-canvas design is hundreds of MB —
-  // enough for iPad Safari to kill the tab. At least one step always stays.
+  // enough for iPad Safari to kill the tab. On a large lattice each snapshot is
+  // big, so we scale BOTH caps down as the canvas grows (you rarely undo more
+  // than a few steps, so shallower history on big art is a fair trade for not
+  // crashing). At least one step always stays.
   const HISTORY_BEAD_BUDGET = 250000
+  const historyCaps = () => {
+    const cells = cols * rows
+    if (cells > 10000) return { steps: 15, budget: 100000 }
+    if (cells > 5000) return { steps: 25, budget: 160000 }
+    return { steps: HISTORY_MAX, budget: HISTORY_BEAD_BUDGET }
+  }
   const pushHistory = (prevDoc) => {
     const st = undoStack.current
     st.push(prevDoc)
     redoStack.current = []
+    const { steps, budget } = historyCaps()
     let total = 0
     for (const d of st) total += docBeads(d)
-    while (st.length > HISTORY_MAX || (st.length > 1 && total > HISTORY_BEAD_BUDGET)) {
+    while (st.length > steps || (st.length > 1 && total > budget)) {
       total -= docBeads(st[0])
       st.shift()
     }
@@ -1008,7 +1026,19 @@ export default function Home() {
   const canvasRef = useRef(null)
   const overlayRef = useRef(null) // hover-ghost canvas, stacked over canvasRef
   const wrapRef = useRef(null)
-  const DPR = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  // Devices with a real pointer (mouse/trackpad) report `hover: hover`; touch
+  // screens (iPad) report `hover: none`. The hover ghost is mouse-only, so on
+  // touch we never create its overlay canvas — that spare full-screen canvas was
+  // ~15-20 MB of dead retina memory on iPad, pushing Safari toward its tab-kill
+  // ceiling for nothing.
+  const canHover = typeof window !== 'undefined' && window.matchMedia
+    ? window.matchMedia('(hover: hover)').matches
+    : false
+  // Cap render resolution: a full-viewport canvas at retina DPR (2) is the
+  // single biggest fixed memory user, and beads read fine a touch softer. Hold
+  // full DPR up to ~2, then stop — never allocate beyond 2× the CSS pixels.
+  const rawDPR = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  const DPR = Math.min(rawDPR, 2)
 
   // small repeating tile for the transparent-background checker
   const checkerTile = useMemo(() => {
@@ -1494,6 +1524,9 @@ export default function Home() {
 
   const onPointerDown = (e) => {
     e.preventDefault()
+    // If the layers panel is open, the first tap on the canvas just collapses it
+    // and gives the canvas back — no bead is painted on that tap.
+    if (showLayers) { setShowLayers(false); return }
     // Drop focus from any input (e.g. a canvas-size pill) the moment a stroke
     // begins, so a following Ctrl/⌘+Z is our bead-undo and never a native
     // text-undo that would revert the cm field and resize the canvas.
@@ -1728,6 +1761,7 @@ export default function Home() {
   // nearestBead lets a drop in a gap still fill the closest bead's region.
   const swatchDrag = useRef(null) // { color, x0, y0, active }
   const [dragGhost, setDragGhost] = useState(null) // { color, x, y } client coords
+  const colorInputRef = useRef(null) // hidden native picker behind the big swatch
 
   const onSwatchDown = (c) => (e) => {
     e.preventDefault()
@@ -1762,6 +1796,24 @@ export default function Home() {
   const onSwatchCancel = () => {
     swatchDrag.current = null
     setDragGhost(null)
+  }
+  // The big current-colour swatch shares the drag-to-fill behaviour, but a plain
+  // TAP opens the colour picker (rather than re-picking the colour it already is).
+  const onBigSwatchUp = (e) => {
+    const d = swatchDrag.current
+    swatchDrag.current = null
+    setDragGhost(null)
+    if (!d) return
+    if (!d.active) { colorInputRef.current?.click(); return } // tap = open picker
+    const rect = canvasRef.current.getBoundingClientRect()
+    if (
+      e.clientX >= rect.left && e.clientX <= rect.right &&
+      e.clientY >= rect.top && e.clientY <= rect.bottom
+    ) {
+      const { x, y } = screenToDoc(e.clientX - rect.left, e.clientY - rect.top, view)
+      pushRecent(d.color)
+      floodFill(tech.nearestBead(geo, x, y), d.color)
+    }
   }
 
 
@@ -1839,10 +1891,10 @@ export default function Home() {
     link.click()
   }
 
-  // no confirm dialog: triggered by a press-and-hold button, and undo-able.
+  // no confirm dialog: undo-able, and a locked/hidden layer just toasts why.
   // Clears the ACTIVE layer only (other layers are untouched, Procreate-style).
   const clearCanvas = () => {
-    if (!canEdit) return
+    if (!canEdit) { showToast(blockedRef.current()); return }
     commit((prev) => (prev.size ? new Map() : prev))
   }
 
@@ -2361,8 +2413,9 @@ export default function Home() {
             onPointerCancel={onPointerCancel}
             onPointerLeave={clearHover}
           />
-          {/* hover ghost lives here so it repaints without redrawing the scene */}
-          <canvas ref={overlayRef} className="overlay" />
+          {/* hover ghost lives here so it repaints without redrawing the scene.
+              Mouse-only: never allocated on touch screens (iPad memory). */}
+          {canHover && <canvas ref={overlayRef} className="overlay" />}
           {/* floating tool strip — right edge, under a right-handed iPad user's
               hand (locked iPad-pass decision #4). Big ≥44px touch targets. */}
           <div className="toolStrip">
@@ -2493,6 +2546,7 @@ export default function Home() {
                       >α</button>
                       <button onClick={() => moveLayer(activeId, 1)} disabled={t === 'bg' || i >= layers.length - 1} title="Move up">↑</button>
                       <button onClick={() => moveLayer(activeId, -1)} disabled={t === 'bg' || i <= 1} title="Move down">↓</button>
+                      <button onClick={clearCanvas} disabled={!isBead} title="Clear this layer's beads (keeps the layer)">Clear</button>
                       <button onClick={() => deleteLayer(activeId)} disabled={t === 'bg'} title="Delete active layer">Del</button>
                     </>
                   )
@@ -2533,12 +2587,26 @@ export default function Home() {
         <div className="card">
           <div className="cardTitle">Colour</div>
           <div className="colorTop">
-            <input
-              type="color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              className="bigSwatch"
-            />
+            <div className="bigSwatchWrap">
+              <button
+                className="bigSwatch"
+                style={{ background: color }}
+                onPointerDown={onSwatchDown(color)}
+                onPointerMove={onSwatchMove}
+                onPointerUp={onBigSwatchUp}
+                onPointerCancel={onSwatchCancel}
+                title="Tap to change colour · drag onto the canvas to fill"
+              />
+              <input
+                ref={colorInputRef}
+                type="color"
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                className="hiddenColorInput"
+                tabIndex={-1}
+                aria-hidden="true"
+              />
+            </div>
             <Pill value={color} label="hex" text onChange={(v) => setColor(v)} />
           </div>
           {recentColors.length > 0 && (
@@ -3041,9 +3109,16 @@ export default function Home() {
         .pillRow { display: flex; gap: 8px; }
 
         .colorTop { display: flex; gap: 10px; align-items: center; }
+        .bigSwatchWrap { position: relative; width: 52px; height: 52px; }
         .bigSwatch {
-          width: 52px; height: 52px; padding: 0; border: 1px solid ${T.line};
-          border-radius: 14px; background: none; cursor: pointer;
+          display: block; width: 52px; height: 52px; padding: 0;
+          border: 1px solid ${T.line}; border-radius: 14px; cursor: pointer;
+          touch-action: none; /* a finger on the swatch drags colour, not the page */
+        }
+        /* native picker sits invisibly over the swatch so tapping opens it there */
+        .hiddenColorInput {
+          position: absolute; inset: 0; width: 100%; height: 100%;
+          opacity: 0; pointer-events: none; border: 0; padding: 0;
         }
         .swatches { display: flex; flex-wrap: wrap; gap: 7px; }
         .sw {
