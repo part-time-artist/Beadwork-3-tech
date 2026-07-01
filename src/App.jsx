@@ -33,6 +33,8 @@ const STORAGE_KEY = 'beadwork3_palettes_v1'
 const DESIGN_KEY = 'beadwork3_design_v1'
 const DESIGNS_KEY = 'beadwork3_designs_v1' // named design slots
 const RECENT_KEY = 'beadwork3_recent_v1' // recently used colours (survives a crash/reload)
+// build stamp (injected by Vite; 'dev' when running the dev server)
+const BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'dev'
 
 // Default preset: the user's own 5 colours (2026-06-11) — soft pink,
 // chartreuse, sky blue, bone, deep violet. (Bead colours may be rich; only
@@ -2257,7 +2259,11 @@ export default function Home() {
     await setMeta('migrated', true)
   }
 
-  // ---- boot: migrate, then reopen the last-edited artwork (or show the gallery) ----
+  // ---- boot: migrate, then land on the gallery (never auto-open a design) ----
+  // We deliberately do NOT auto-reopen the last artwork: on iPad a heavy design
+  // could crash the tab, and auto-loading it on every launch turned that into a
+  // crash → reopen → crash loop. Landing on the gallery (Procreate-style) lets
+  // you recover — back up, or pick a different piece — instead of re-crashing.
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -2266,17 +2272,7 @@ export default function Home() {
         const all = await listArtworks()
         if (cancelled) return
         setArtworks(all.map(summarize))
-        if (!all.length) { setScreen('gallery'); return }
-        const lastId = await getMeta('lastOpenedId')
-        const last =
-          all.find((a) => a.id === lastId) ||
-          all.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0]
-        if (cancelled) return
-        applyDesign(last)
-        undoStack.current = []
-        redoStack.current = []
-        setCurrentArtworkId(last.id)
-        setScreen('editor')
+        setScreen('gallery')
       } catch (e) {
         if (!cancelled) setScreen('gallery')
       }
@@ -2595,8 +2591,13 @@ export default function Home() {
           </div>
         </div>
         <div className="stageInfo">
-          {cols} × {rows} BEADS · {canvasCm.w}×{canvasCm.h} CM · BEAD {beadMM.w}×{beadMM.h} MM · {Math.round(view.scale * 100)}%
+          {cols} × {rows} GRID · {canvasCm.w}×{canvasCm.h} CM · BEAD {beadMM.w}×{beadMM.h} MM · {Math.round(view.scale * 100)}%
           {view.rot ? ` · ${(((Math.round(view.rot * 180 / Math.PI) % 360) + 360) % 360)}°` : ''}
+          {' · '}{layers.reduce((n, l) => n + (l.beads ? l.beads.size : 0), 0).toLocaleString()} PLACED
+          {typeof performance !== 'undefined' && performance.memory
+            ? ` · ${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB`
+            : ''}
+          {' · v'}{BUILD_ID}
         </div>
       </main>
 
@@ -2753,7 +2754,7 @@ export default function Home() {
           ) : (
             <div className="gallery">
               <div className="galleryHead">
-                <div className="brand big">MY ARTWORKS<span className="dot" /></div>
+                <div className="brand big">MY ARTWORKS<span className="dot" /><span className="buildTag">v{BUILD_ID}</span></div>
                 <button className="primary newBtn" onClick={() => setChooser(true)}>+ New artwork</button>
               </div>
               {artworks.length === 0 ? (
@@ -3038,6 +3039,10 @@ export default function Home() {
           flex-shrink: 0; color: ${T.inkSoft}; font-size: 10px; font-family: ${T.mono};
           text-transform: uppercase; letter-spacing: 0.08em;
           padding: 9px 16px; border-top: 1px solid ${T.line}; background: ${T.bg};
+        }
+        .buildTag {
+          margin-left: 10px; font-family: ${T.mono}; font-size: 10px;
+          letter-spacing: 0.08em; color: ${T.inkSoft}; opacity: 0.7;
         }
 
         .panel {
