@@ -1761,7 +1761,6 @@ export default function Home() {
   // nearestBead lets a drop in a gap still fill the closest bead's region.
   const swatchDrag = useRef(null) // { color, x0, y0, active }
   const [dragGhost, setDragGhost] = useState(null) // { color, x, y } client coords
-  const colorInputRef = useRef(null) // hidden native picker behind the big swatch
 
   const onSwatchDown = (c) => (e) => {
     e.preventDefault()
@@ -1797,24 +1796,47 @@ export default function Home() {
     swatchDrag.current = null
     setDragGhost(null)
   }
-  // The big current-colour swatch shares the drag-to-fill behaviour, but a plain
-  // TAP opens the colour picker (rather than re-picking the colour it already is).
-  const onBigSwatchUp = (e) => {
-    const d = swatchDrag.current
-    swatchDrag.current = null
-    setDragGhost(null)
-    if (!d) return
-    if (!d.active) { colorInputRef.current?.click(); return } // tap = open picker
-    const rect = canvasRef.current.getBoundingClientRect()
-    if (
-      e.clientX >= rect.left && e.clientX <= rect.right &&
-      e.clientY >= rect.top && e.clientY <= rect.bottom
-    ) {
-      const { x, y } = screenToDoc(e.clientX - rect.left, e.clientY - rect.top, view)
-      pushRecent(d.color)
-      floodFill(tech.nearestBead(geo, x, y), d.color)
+
+  // The big current-colour swatch stays a real <input type="color"> so a TAP opens
+  // the native colour wheel/RGB picker (a programmatic open doesn't work on iOS —
+  // that broke it). Drag-to-fill is layered on WITHOUT capturing the pointer or
+  // preventing the tap: we watch the window during the press, and only if it turns
+  // into a real drag do we fill and suppress the click that would open the picker.
+  const bigSwatchDidDrag = useRef(false)
+  const onBigSwatchDown = (e) => {
+    if (e.button != null && e.button !== 0) return // left/primary only
+    bigSwatchDidDrag.current = false
+    const x0 = e.clientX
+    const y0 = e.clientY
+    const dragColor = color
+    const move = (ev) => {
+      if (!bigSwatchDidDrag.current && Math.hypot(ev.clientX - x0, ev.clientY - y0) > 8) {
+        bigSwatchDidDrag.current = true
+      }
+      if (bigSwatchDidDrag.current) setDragGhost({ color: dragColor, x: ev.clientX, y: ev.clientY })
     }
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      setDragGhost(null)
+      if (!bigSwatchDidDrag.current) return // a plain tap → let the picker open
+      const rect = canvasRef.current.getBoundingClientRect()
+      if (
+        ev.clientX >= rect.left && ev.clientX <= rect.right &&
+        ev.clientY >= rect.top && ev.clientY <= rect.bottom
+      ) {
+        const { x, y } = screenToDoc(ev.clientX - rect.left, ev.clientY - rect.top, view)
+        pushRecent(dragColor)
+        floodFill(tech.nearestBead(geo, x, y), dragColor)
+      }
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
   }
+  // if the press turned into a drag, swallow the click so the picker doesn't open
+  const onBigSwatchClick = (e) => { if (bigSwatchDidDrag.current) e.preventDefault() }
 
 
   // ---- export (print-ready chart: outlined beads + guides + numbers + legend) ----
@@ -2587,26 +2609,15 @@ export default function Home() {
         <div className="card">
           <div className="cardTitle">Colour</div>
           <div className="colorTop">
-            <div className="bigSwatchWrap">
-              <button
-                className="bigSwatch"
-                style={{ background: color }}
-                onPointerDown={onSwatchDown(color)}
-                onPointerMove={onSwatchMove}
-                onPointerUp={onBigSwatchUp}
-                onPointerCancel={onSwatchCancel}
-                title="Tap to change colour · drag onto the canvas to fill"
-              />
-              <input
-                ref={colorInputRef}
-                type="color"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                className="hiddenColorInput"
-                tabIndex={-1}
-                aria-hidden="true"
-              />
-            </div>
+            <input
+              type="color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              className="bigSwatch"
+              onPointerDown={onBigSwatchDown}
+              onClick={onBigSwatchClick}
+              title="Tap to open the colour picker · drag onto the canvas to fill"
+            />
             <Pill value={color} label="hex" text onChange={(v) => setColor(v)} />
           </div>
           {recentColors.length > 0 && (
@@ -3109,16 +3120,10 @@ export default function Home() {
         .pillRow { display: flex; gap: 8px; }
 
         .colorTop { display: flex; gap: 10px; align-items: center; }
-        .bigSwatchWrap { position: relative; width: 52px; height: 52px; }
         .bigSwatch {
-          display: block; width: 52px; height: 52px; padding: 0;
-          border: 1px solid ${T.line}; border-radius: 14px; cursor: pointer;
-          touch-action: none; /* a finger on the swatch drags colour, not the page */
-        }
-        /* native picker sits invisibly over the swatch so tapping opens it there */
-        .hiddenColorInput {
-          position: absolute; inset: 0; width: 100%; height: 100%;
-          opacity: 0; pointer-events: none; border: 0; padding: 0;
+          width: 52px; height: 52px; padding: 0; border: 1px solid ${T.line};
+          border-radius: 14px; background: none; cursor: pointer;
+          touch-action: none; /* dragging the swatch fills, it must not scroll the panel */
         }
         .swatches { display: flex; flex-wrap: wrap; gap: 7px; }
         .sw {
