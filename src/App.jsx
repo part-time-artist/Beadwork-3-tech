@@ -1175,33 +1175,58 @@ export default function Home() {
           ctx.restore()
           continue
         }
-        // bead layer: draw only its filled beads (top-wins emerges from z-order).
-        // Batch beads of the same colour into one Path2D and fill it in a single
-        // call — thousands of per-bead ctx.fill()s were the on-screen lag.
+        // bead layer: draw its beads by ITERATING THE MAP (placed beads only),
+        // never every grid cell. A big EMPTY canvas has ~313k cells but maybe a
+        // few beads — looping all cells (building a key string each) on every
+        // frame is what vanished iPad Safari on a 100×100 canvas. Batch by colour
+        // into one Path2D/fill.
         const map = beadMapOf(lay)
         if (!map.size) continue
         const isActive = lay.id === aId
         const byColor = new Map() // colour -> Path2D
-        for (let row = r0; row < r1; row++) {
-          for (let col = c0; col < c1; col++) {
-            if (!tech.beadExists(col, row)) continue
-            const k = key(col, row)
+        const pathFor = (fill) => {
+          let p = byColor.get(fill)
+          if (!p) { p = new Path2D(); byColor.set(fill, p) }
+          return p
+        }
+        // fill the whole cell (apex/even rows are half-density → double-wide) so a
+        // zoomed-out design reads as a clean solid image, not dots
+        const rectCell = (p, cx, cy, row) =>
+          p.rect(cx - (row % 2 === 0 ? geo.Px : geo.Px / 2), cy - geo.Py / 2, row % 2 === 0 ? geo.Px * 2 : geo.Px, geo.Py)
+        if (onScreenBw < 6) {
+          // beads tiny on screen → fast rects, straight from the Map (no per-bead
+          // array), so even a fully-packed huge canvas stays cheap
+          for (const [k, fill] of map) {
+            const ci = k.indexOf(',')
+            const col = +k.slice(0, ci)
+            const row = +k.slice(ci + 1)
+            if (col < c0 || col >= c1 || row < r0 || row >= r1) continue
             if (isActive && placing?.hide?.has(k)) continue
-            const fill = map.get(k)
-            if (!fill) continue
             filledCells.add(cellId(col, row))
-            let p = byColor.get(fill)
-            if (!p) { p = new Path2D(); byColor.set(fill, p) }
             const { cx, cy } = geo.centerFor(col, row)
-            if (simple) {
-              // fast overview: fill each cell so the zoomed-out design reads as a
-              // solid low-res image, not dots. Half-density apex (even) rows sit 2
-              // pitches apart, so their cell is double-wide. Exact pitch so cells
-              // tile edge-to-edge without the overlap that blobbed together.
-              const cw = row % 2 === 0 ? geo.Px * 2 : geo.Px
-              const ch = geo.Py
-              p.rect(cx - cw / 2, cy - ch / 2, cw, ch)
-            } else tech.beadOutline(p, cx, cy, dw, dh, tiltFor(col, row))
+            rectCell(pathFor(fill), cx, cy, row)
+          }
+        } else {
+          // beads big enough to show the woven shape: collect the visible ones
+          // (few, because they're big), draw detailed ovals — unless there are so
+          // many that filling ovals would stall, then fall back to rects.
+          const vis = []
+          for (const [k, fill] of map) {
+            const ci = k.indexOf(',')
+            const col = +k.slice(0, ci)
+            const row = +k.slice(ci + 1)
+            if (col < c0 || col >= c1 || row < r0 || row >= r1) continue
+            if (isActive && placing?.hide?.has(k)) continue
+            filledCells.add(cellId(col, row))
+            vis.push(col, row, fill)
+          }
+          const asRect = vis.length / 3 > 2000
+          for (let i = 0; i < vis.length; i += 3) {
+            const col = vis[i], row = vis[i + 1], fill = vis[i + 2]
+            const { cx, cy } = geo.centerFor(col, row)
+            const p = pathFor(fill)
+            if (asRect) rectCell(p, cx, cy, row)
+            else tech.beadOutline(p, cx, cy, dw, dh, tiltFor(col, row))
           }
         }
         for (const [fill, p] of byColor) {
