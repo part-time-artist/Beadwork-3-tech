@@ -436,3 +436,18 @@ Four guards keep it under the line:
   twice its on-screen pixels.
 - **Recent colours persist** to `localStorage` (`RECENT_KEY`), so even if the tab
   is killed your recent colours come back on reload.
+- **Fast draw-stroke rendering** (`drawStrokeFast` in `App.jsx`). The real crash
+  trigger was *drawing*: on every frame of a stroke the app rebuilt the picture of
+  **all** the beads (up to ~10,000) from scratch — a storm of throwaway memory that
+  overran Safari. Now, when a freehand draw begins on the top layer, the finished
+  scene is snapshotted once into an offscreen canvas; each frame just re-stamps
+  that snapshot and paints **only the new beads** on top. The full `drawScene`
+  runs again at stroke end to reconcile. Erase and snapped straight lines fall
+  back to the full path.
+- **Bigger canvases render at 1.5× instead of 2×** (`DPR`) — ~45% less canvas
+  memory on iPad, invisible at bead size.
+- **Boot lands on the gallery** (`screen` starts at the gallery, never
+  auto-opens): a heavy design can't reload-and-crash in a loop.
+- **A build stamp** (`BUILD_ID`, injected by Vite) shows in the gallery header and
+  status bar so we can confirm which bundle actually loaded past Safari's cache;
+  the status bar also shows the live **PLACED** bead count.

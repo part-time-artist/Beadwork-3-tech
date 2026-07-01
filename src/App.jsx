@@ -327,8 +327,8 @@ export default function Home() {
   const HISTORY_BEAD_BUDGET = 250000
   const historyCaps = () => {
     const cells = cols * rows
-    if (cells > 10000) return { steps: 15, budget: 100000 }
-    if (cells > 5000) return { steps: 25, budget: 160000 }
+    if (cells > 10000) return { steps: 8, budget: 70000 }
+    if (cells > 5000) return { steps: 20, budget: 150000 }
     return { steps: HISTORY_MAX, budget: HISTORY_BEAD_BUDGET }
   }
   const pushHistory = (prevDoc) => {
@@ -741,6 +741,7 @@ export default function Home() {
           if (alpha && !map.has(k)) continue // only recolour existing beads
           if (map === strokeBase.current) { map = new Map(map); beadsRef.current = map }
           map.set(k, color); changed = true
+          if (fastStrokeRef.current) strokePaintedRef.current.add(k)
         }
       }
       if (changed) {
@@ -1028,6 +1029,13 @@ export default function Home() {
   const canvasRef = useRef(null)
   const overlayRef = useRef(null) // hover-ghost canvas, stacked over canvasRef
   const wrapRef = useRef(null)
+  // Fast draw-stroke rendering: instead of re-rendering the whole (up to 10k-bead)
+  // grid on every frame of a stroke — the allocation churn that crashed iPad
+  // Safari — we snapshot the scene into strokeCacheRef when a draw stroke starts
+  // and, each frame, blit that + stamp only the beads painted so far on top.
+  const strokeCacheRef = useRef(null)   // offscreen canvas: scene at stroke start
+  const strokePaintedRef = useRef(null) // Set of "col,row" keys painted this stroke
+  const fastStrokeRef = useRef(false)   // true while a freehand DRAW stroke is active
   // Devices with a real pointer (mouse/trackpad) report `hover: hover`; touch
   // screens (iPad) report `hover: none`. The hover ghost is mouse-only, so on
   // touch we never create its overlay canvas — that spare full-screen canvas was
@@ -1040,7 +1048,9 @@ export default function Home() {
   // single biggest fixed memory user, and beads read fine a touch softer. Hold
   // full DPR up to ~2, then stop — never allocate beyond 2× the CSS pixels.
   const rawDPR = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
-  const DPR = Math.min(rawDPR, 2)
+  // On a big lattice, drop to 1.5× so the (viewport-sized) canvas backing store
+  // is ~45% smaller — real relief on iPad, where beads that size look the same.
+  const DPR = Math.min(rawDPR, cols * rows > 8000 ? 1.5 : 2)
 
   // small repeating tile for the transparent-background checker
   const checkerTile = useMemo(() => {
@@ -1250,7 +1260,46 @@ export default function Home() {
     },
     [viewport, view, geo, beads, layers, activeId, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing, tech]
   )
-  drawRef.current = drawScene // the rAF repaint path always uses the latest
+
+  // Fast stroke repaint: blit the scene snapshot taken at stroke start, then draw
+  // ONLY the beads painted so far this stroke on top. No 10k-bead rebuild → no
+  // per-frame allocation storm. Used only for freehand DRAW on the top layer; the
+  // full drawScene reconciles everything at stroke end.
+  const drawStrokeFast = useCallback(
+    (ctx) => {
+      const { w: vw, h: vh } = viewport
+      const cache = strokeCacheRef.current
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+      if (cache) ctx.drawImage(cache, 0, 0)
+      const painted = strokePaintedRef.current
+      if (!painted || !painted.size) return
+      const { scale, tx, ty, rot } = view
+      const vcos = Math.cos(rot)
+      const vsin = Math.sin(rot)
+      ctx.setTransform(
+        DPR * scale * vcos, DPR * scale * vsin,
+        -DPR * scale * vsin, DPR * scale * vcos,
+        tx * DPR, ty * DPR
+      )
+      const drawScale = 1 + pack * (PACKED_DRAW - 1)
+      const dw = Bw * drawScale
+      const dh = Bh * drawScale
+      const path = new Path2D()
+      for (const k of painted) {
+        const ci = k.indexOf(',')
+        const c = +k.slice(0, ci)
+        const r = +k.slice(ci + 1)
+        const { cx, cy } = geo.centerFor(c, r)
+        tech.beadOutline(path, cx, cy, dw, dh, tiltFor(c, r))
+      }
+      ctx.fillStyle = color
+      ctx.fill(path)
+    },
+    [viewport, view, DPR, pack, Bw, Bh, geo, tech, tiltFor, color]
+  )
+  // rAF repaint uses the fast path mid-stroke, the full scene otherwise
+  drawRef.current = (ctx) => (fastStrokeRef.current ? drawStrokeFast(ctx) : drawScene(ctx))
 
   // Overlay repaint: just the brush hover ghost, in the SAME document transform
   // as the scene so it lands on the exact cells the brush would paint. Cheap, so
@@ -1507,6 +1556,7 @@ export default function Home() {
         if (s.snapped && n === s.lastN) return
         s.snapped = true
         s.lastN = n
+        fastStrokeRef.current = false // snapped line replaces the map → full redraw
         applyBeads(paintAlong(strokeBase.current, lineSamples(s.start, snap)), true)
         return
       }
@@ -1514,6 +1564,7 @@ export default function Home() {
         // was a snapped line, now curving: give back the freehand path
         s.snapped = false
         s.locked = true
+        fastStrokeRef.current = false // rebuilt from base → full redraw
         applyBeads(paintAlong(strokeBase.current, s.pts), true)
         return
       }
@@ -1570,7 +1621,25 @@ export default function Home() {
     dragging.current = true
     strokeBase.current = beadsRef.current // history: snapshot at stroke start
     strokeRef.current = { start: p, pts: [], locked: false, snapped: false, lastN: -1 }
-    if (tool === 'draw') pushRecent(color)
+    // arm the fast-stroke path for a freehand DRAW on the top-most visible layer
+    // (so stamping new beads over the snapshot can't paint over an upper layer).
+    fastStrokeRef.current = false
+    if (tool === 'draw') {
+      pushRecent(color)
+      const li = layersRef.current
+      const aIdx = li.findIndex((l) => l.id === activeIdRef.current)
+      const coveredAbove = li.some((l, i) => i > aIdx && l.visible)
+      if (!coveredAbove && canvasRef.current) {
+        const src = canvasRef.current
+        let cache = strokeCacheRef.current
+        if (!cache) { cache = document.createElement('canvas'); strokeCacheRef.current = cache }
+        cache.width = src.width
+        cache.height = src.height
+        cache.getContext('2d').drawImage(src, 0, 0)
+        strokePaintedRef.current = new Set()
+        fastStrokeRef.current = true
+      }
+    }
     paintBrush(p.x, p.y, tool)
   }
 
@@ -1691,6 +1760,10 @@ export default function Home() {
     dragging.current = false
     panning.current = null
     placeDrag.current = null
+    // end the fast-stroke path; the committed setBeads/setLayers above trigger a
+    // full drawScene that reconciles the snapshot with the real scene
+    fastStrokeRef.current = false
+    strokePaintedRef.current = null
   }
 
   // When a two-finger gesture ends, gently snap the rotation to the nearest
