@@ -1123,10 +1123,22 @@ export default function Home() {
       const c0 = Math.max(0, Math.floor((docLeft - geo.padX - geo.rowOffset) / geo.Px) - 1)
       const c1 = Math.min(cols, Math.ceil((docRight - geo.padX) / geo.Px) + 1)
 
-      // level of detail: simplify / drop outlines when beads are tiny on screen
+      // level of detail. Filling a detailed superellipse oval is ~45× slower than
+      // a plain rect, so drawing thousands at once froze the tab for SECONDS per
+      // frame (measured). Two gates keep every redraw fast:
+      //   • tiny beads (< 4 px) → rects, no outlines (you can't see the shape);
+      //   • too much lattice on screen (zoomed out / big canvas) → rects too, so
+      //     we never fill more than a couple thousand ovals in one frame.
+      // Detailed ovals are kept when zoomed in, where only a few are visible and
+      // filling them is cheap — that's where the weave shape actually reads.
       const onScreenBw = Bw * scale
-      const drawOutlines = onScreenBw > 5
-      const simple = onScreenBw < 4
+      const visibleCells = Math.max(0, r1 - r0) * Math.max(0, c1 - c0)
+      // rects (fast) when beads are small on screen — you can't see the oval shape
+      // below ~6 px anyway — or when so much lattice is visible that filling all
+      // the ovals would stall a frame. Detailed ovals return when zoomed in close.
+      const heavy = onScreenBw < 6 || visibleCells > 3000
+      const drawOutlines = onScreenBw > 6 && !heavy
+      const simple = heavy
       ctx.lineWidth = 1.25 / scale
       ctx.strokeStyle = '#cdcac3'
 
@@ -1181,8 +1193,15 @@ export default function Home() {
             let p = byColor.get(fill)
             if (!p) { p = new Path2D(); byColor.set(fill, p) }
             const { cx, cy } = geo.centerFor(col, row)
-            if (simple) p.rect(cx - dw / 2, cy - dh / 2, dw, dh)
-            else tech.beadOutline(p, cx, cy, dw, dh, tiltFor(col, row))
+            if (simple) {
+              // fast overview: fill the whole cell so the zoomed-out design reads
+              // as a solid low-res image, not dots. Half-density apex (even) rows
+              // sit 2 pitches apart, so their cell is double-wide; a hair of
+              // overlap avoids seams. (Detailed ovals return once zoomed in.)
+              const cw = (row % 2 === 0 ? geo.Px * 2 : geo.Px) * 1.03
+              const ch = geo.Py * 1.06
+              p.rect(cx - cw / 2, cy - ch / 2, cw, ch)
+            } else tech.beadOutline(p, cx, cy, dw, dh, tiltFor(col, row))
           }
         }
         for (const [fill, p] of byColor) {
