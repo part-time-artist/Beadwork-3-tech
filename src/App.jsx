@@ -197,6 +197,7 @@ export default function Home() {
   const [beads, setBeads] = useState(() => firstLayersRef.current.layers.find((l) => l.type === 'bead').beads)
   const [showLayers, setShowLayers] = useState(false)
   const [tool, setTool] = useState('draw') // draw | erase | select
+  const [exporting, setExporting] = useState(false) // "Save PNG" in progress → spinner
   const [color, setColor] = useState('#F3CEDE') // starts on the palette's pink
   const [pack, setPack] = useState(0.75) // 0 = spaced (true size) … 1 = max packed; 0.75 ≈ touching
   const [brush, setBrush] = useState(1) // brush radius in beads
@@ -2127,9 +2128,15 @@ export default function Home() {
     return out
   }
 
-  const exportPNG = () => {
+  const exportPNG = async () => {
+    if (exporting) return
+    setExporting(true)
+    // let the button's "Preparing…" state actually paint before we hog the main
+    // thread building the chart (a big chart is a heavy synchronous render).
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))
+    try {
     const flat = flattenVisible()
-    const chart = renderFullChart({
+    const chart = await renderFullChart({
       cols,
       rows,
       tiltFor,
@@ -2169,10 +2176,26 @@ export default function Home() {
     }
     ctx.drawImage(chart, 0, 0)
     ctx.drawImage(legend, 0, chart.height + gap)
-    const link = document.createElement('a')
-    link.download = 'beadwork-chart.png'
-    link.href = out.toDataURL('image/png')
-    link.click()
+    // toBlob (async) instead of toDataURL: it doesn't build a giant base64
+    // string on the main thread and downloads via an object URL, so a big export
+    // stays lighter on memory. Same pixels ⇒ same PNG, so identical-size exports
+    // (the animation use case) still match.
+    await new Promise((resolve) => {
+      out.toBlob((blob) => {
+        if (blob) {
+          const url = URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          link.download = 'beadwork-chart.png'
+          link.href = url
+          link.click()
+          URL.revokeObjectURL(url)
+        }
+        resolve()
+      }, 'image/png')
+    })
+    } finally {
+      setExporting(false)
+    }
   }
 
   // no confirm dialog: undo-able, and a locked/hidden layer just toasts why.
@@ -2992,7 +3015,9 @@ export default function Home() {
         </div>
 
         <div className="saveCluster">
-          <button className="primary" onClick={exportPNG}>Save PNG</button>
+          <button className="primary" onClick={exportPNG} disabled={exporting}>
+            {exporting ? 'Preparing PNG…' : 'Save PNG'}
+          </button>
           <div className="hint tip">Your work auto-saves. “Save PNG” makes the printable chart for the artisan.</div>
         </div>
       </aside>

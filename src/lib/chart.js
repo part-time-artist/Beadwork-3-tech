@@ -54,30 +54,57 @@ export function makePrintGeo({ cols, rows, printBeadMm, beadRatio, tech }) {
 // reproduces the on-screen "packed" look set by the spacing slider — 1 = true
 // bead size with its natural gaps, >1 = beads pressed together. Mirrors the
 // drawScale in App.jsx's drawScene so screen and PNG match.
-export function drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech, fillScale = 1 }) {
+export async function drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech, fillScale = 1 }) {
   const lw = Math.max(0.8, geo.Bw * 0.035)
   const dw = geo.Bw * fillScale
   const dh = geo.Bh * fillScale
+  ctx.lineWidth = lw
+  // Batch beads into Path2Ds (a few fills/strokes) instead of a beginPath→fill→
+  // stroke PER bead — that per-bead canvas churn was the multi-second "Save PNG"
+  // freeze. But we must also FLUSH every ~1500 beads: appending tens of thousands
+  // of subpaths into ONE Path2D degrades super-linearly (a full chart is 100k+
+  // beads, which hung for minutes), so each path is kept small and drawn as we
+  // go. (On screen this never bit us — the draw is culled to the visible range.)
+  const FLUSH = 1500
+  let empty = new Path2D()          // empty cells (true size) — grid outline
+  let byColor = new Map()           // colour -> Path2D (filled beads, enlarged)
+  let pending = 0
+  const flush = () => {
+    if (!pending) return
+    // empty grid outlines, then colour fills, then each colour's outline on top,
+    // so a run of same-colour beads stays countable (locked decision #2).
+    ctx.strokeStyle = C.emptyOutline
+    ctx.stroke(empty)
+    for (const [fill, p] of byColor) { ctx.fillStyle = fill; ctx.fill(p) }
+    ctx.strokeStyle = C.filledOutline
+    for (const p of byColor.values()) ctx.stroke(p)
+    empty = new Path2D()
+    byColor = new Map()
+    pending = 0
+  }
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
       if (!tech.beadExists(col, row)) continue
       const { cx, cy } = geo.centerFor(col, row)
       const fill = beads.get(key(col, row))
       const tilt = tiltFor(col, row)
-      // filled beads draw enlarged (packed); empty cells stay true-size so the
-      // grid underneath stays readable
-      tech.beadPath(ctx, cx, cy, fill ? dw : geo.Bw, fill ? dh : geo.Bh, tilt)
       if (fill) {
-        ctx.fillStyle = fill
-        ctx.fill()
+        let p = byColor.get(fill)
+        if (!p) { p = new Path2D(); byColor.set(fill, p) }
+        tech.beadOutline(p, cx, cy, dw, dh, tilt) // filled beads enlarged (packed)
+      } else {
+        tech.beadOutline(empty, cx, cy, geo.Bw, geo.Bh, tilt) // empty stays true size
       }
-      // every bead gets a thin outline so a run of same-colour beads stays
-      // countable on paper (locked decision #2)
-      ctx.lineWidth = lw
-      ctx.strokeStyle = fill ? C.filledOutline : C.emptyOutline
-      ctx.stroke()
+      if (++pending >= FLUSH) {
+        flush()
+        // yield to the event loop between chunks so a big export can't freeze the
+        // tab: the browser repaints (the "Preparing…" spinner) and stays
+        // responsive instead of blocking the main thread for seconds.
+        await new Promise((r) => setTimeout(r))
+      }
     }
   }
+  flush()
 }
 
 // Bolder guide lines every `every` rows/cols to chunk the grid for counting.
@@ -144,7 +171,7 @@ function paintImageBackground(ctx, W, H, img, t = { scale: 1, fx: 0, fy: 0 }) {
 
 // Render the entire chart (beads + outlines + guides + edge numbers) to a fresh
 // canvas. A margin on the top/left holds the edge numbers. Returns the canvas.
-export function renderFullChart({
+export async function renderFullChart({
   beads, cols, rows, tiltFor, tech, printBeadMm = 8, beadRatio = 1.25,
   background, composite, srcDoc, guides = true, numbers = true, every = GUIDE_EVERY, fillScale = 1,
 }) {
@@ -181,14 +208,14 @@ export function renderFullChart({
         ctx.drawImage(item.img, item.t.x * f, item.t.y * f, item.img.width * item.t.scale * f, item.img.height * item.t.scale * f)
         ctx.restore()
       } else if (item.type === 'beads') {
-        drawBeads(ctx, { geo, beads: item.map, cols, rows, tiltFor, tech, fillScale })
+        await drawBeads(ctx, { geo, beads: item.map, cols, rows, tiltFor, tech, fillScale })
       }
     }
   } else {
     if (background && background.type === 'image' && background.img) {
       paintImageBackground(ctx, geo.width, geo.height, background.img, background.t)
     }
-    drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech, fillScale })
+    await drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech, fillScale })
   }
   if (guides) drawGuides(ctx, { geo, cols, rows, every })
   if (numbers) drawNumbers(ctx, { geo, cols, rows, every, mode: 'margin' })

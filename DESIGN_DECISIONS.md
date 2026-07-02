@@ -576,3 +576,28 @@ at all zooms, agreed next feature):
   errors) and a texture-vs-ovals crop comparison across the 6px threshold showed
   the tile registers exactly onto the real lattice. Also re-verified the Jul-1
   render fixes: `scripts/perf100.mjs` (235,155 beads, no freeze, no errors).
+
+IMPLEMENTED 2026-07-02 (`src/lib/chart.js`, `src/App.jsx`) — **fast PNG export**
+(the slow/"felt-crashed" Save PNG, drill item #2):
+- Root cause: `drawBeads` did a `beginPath → fill → stroke` PER bead over every
+  cell — the same per-bead canvas churn that stalled the on-screen render. AND a
+  first batching attempt (accumulate all beads into one Path2D) was WORSE: append
+  degrades super-linearly, so one path holding ~37k+ subpaths hung for tens of
+  seconds (measured: a full 40×40 export went from ~1.7s for the first 8k beads to
+  ~12s for a later 8k block — clearly O(n²)).
+- Fix: batch into Path2Ds (empty-cell outlines + one path per fill colour) but
+  **FLUSH every ~1500 beads** (fill/stroke then start fresh paths), so no path
+  grows large. Keeps the render O(beads). 1500 matches the on-screen oval cap.
+- Responsiveness: `drawBeads`/`renderFullChart` are now **async and yield to the
+  event loop after each flush**, so a big export no longer blocks the main thread
+  for seconds — the tab stays responsive and repaints. `exportPNG` awaits it.
+- UX: `exporting` state → the Save PNG button shows **“Preparing PNG…”** and is
+  disabled; a `requestAnimationFrame`+`setTimeout` yield lets that state paint
+  before the render starts, so it can never look frozen/crashed. Switched the
+  download from `toDataURL` to **`toBlob` + object URL** (no giant base64 string
+  on the main thread; lighter memory). Same pixels ⇒ same PNG, so the
+  identical-size "animation frame" export property is preserved.
+- Verified `scripts/exportperf.mjs`: a fully-filled 40×40 cm chart (37,698 beads)
+  exports in ~3.6s (was >45s / effectively hung), worst main-thread task 271ms
+  (was a single ~3.6s block before yielding), valid 3648×4113 PNG, legend count
+  matches (#F3CEDE ×37698), no errors.

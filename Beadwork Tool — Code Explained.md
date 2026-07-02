@@ -475,3 +475,19 @@ Four guards keep it under the line:
   in past ~6 px we go back to real, sharp ovals, and the stamp lines up exactly
   with them (verified by `scripts/beadtex.mjs`). The stamp is rebuilt only when
   the bead size, spacing, or background colour changes — never every frame.
+- **“Save PNG” no longer freezes** (`drawBeads` in `chart.js`, `exportPNG` in
+  `App.jsx`). Exporting the printable chart draws every bead outline at print
+  resolution, and on a big design that was hundreds of thousands of beads. Two
+  things were wrong. First, it drew each bead one-at-a-time (start a shape, fill
+  it, outline it — repeat), the same slow per-bead pattern we'd already fixed on
+  screen. Second — and worse — a first attempt to speed it up by collecting *all*
+  the beads into one big shape and drawing it once actually made it hang for
+  minutes: adding shapes to a single growing “path” object gets slower the bigger
+  it is, so it snowballs. The fix collects beads into a shape but **empties it
+  every ~1,500 beads** (draws that batch, then starts fresh), so the path never
+  grows big and the whole export stays fast and steady. On top of that, the
+  export now **pauses for a breath between batches** so the browser tab doesn't
+  lock up — you can see the button change to “Preparing PNG…” and the page stays
+  alive instead of looking crashed. Result: a fully-filled 40×40 cm chart (~37,700
+  beads) went from *over 45 seconds of frozen tab* to about **3.6 seconds, with no
+  freeze** (verified by `scripts/exportperf.mjs`).
