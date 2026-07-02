@@ -455,3 +455,23 @@ Four guards keep it under the line:
 - **A build stamp** (`BUILD_ID`, injected by Vite) shows in the gallery header and
   status bar so we can confirm which bundle actually loaded past Safari's cache;
   the status bar also shows the live **PLACED** bead count.
+- **Bead-texture overlay — the woven look at mid-zoom** (`beadTexture` +
+  `texActive` in `App.jsx`). The problem: when you zoom out, there are too many
+  beads to draw each as a detailed oval (drawing ~14,000 ovals froze the tab for
+  ~4.5 seconds), so we fall back to fast solid colour *rectangles* — but then the
+  design looks like flat blocks of colour, not woven beads. The fix reinstates the
+  bead shape **without** drawing every bead. Here's the trick: the 3-bead lattice
+  repeats — the exact same arrangement of beads recurs every **2 columns × 4 rows**
+  (that little block contains both an apex row, both base rows, and both ±45° tilt
+  angles). So we draw that one small block **once** onto a tiny hidden canvas — a
+  "stamp" — filled with the thread/gap colour, with the bead shapes *punched out*
+  of it (left transparent). Then, instead of drawing thousands of beads, we lay
+  that one stamp over the flat colour rectangles and let the browser **tile it**
+  across the whole design in a single paint (`ctx.createPattern`). Where the stamp
+  is transparent (the beads) the colour shows through; where it's opaque (the
+  thread) you get the gap. Result: a woven field of beads for the cost of *one*
+  fill, no matter how many beads there are. It only kicks in when beads are
+  2–6 px on screen (big enough to see a shape, too many to draw as ovals); zoomed
+  in past ~6 px we go back to real, sharp ovals, and the stamp lines up exactly
+  with them (verified by `scripts/beadtex.mjs`). The stamp is rebuilt only when
+  the bead size, spacing, or background colour changes — never every frame.

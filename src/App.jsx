@@ -99,6 +99,16 @@ function timeAgo(ts) {
 // counts and the printed chart are untouched.
 const PACKED_DRAW = 1.2
 
+// Bead-texture overlay (the woven look at mid-zoom, when there are too many beads
+// to fill as ovals without stalling). We bake ONE tiny tile of the lattice motif
+// and lay it over the fast colour rects, so the bead shape reads at O(1) instead
+// of O(beads). TILE_BEAD_PX = source detail per bead in the tile; must cover the
+// biggest on-screen bead the rect path ever shows (≈6px) at DPR 2 → 12px. Below
+// TEX_MIN_PX a bead is too small on screen to show any shape, so we skip the
+// overlay and just show solid colour (correct for a far-zoom overview).
+const TILE_BEAD_PX = 12
+const TEX_MIN_PX = 2.5
+
 // Reference images are downscaled to this longest side before storing, so a
 // full-res phone photo can't decode to tens of MB and crash iPad Safari.
 const MAX_IMG_SIDE = 2400
@@ -524,6 +534,61 @@ export default function Home() {
     (col, row) => tech.tiltFor(col, row),
     [tech]
   )
+
+  // ---- bead-texture tile (woven look at mid-zoom) ----------------------------
+  // Build ONE small canvas holding the full lattice motif — the pattern repeats
+  // every 2 columns × 4 rows (that spans both apex/base rows AND both tilt
+  // angles), so a 2·Px × 4·Py tile captures everything. The tile is filled with
+  // the thread/gap colour and every bead silhouette is punched OUT of it
+  // (destination-out → transparent). Laid over the fast colour rects with a
+  // single fill, it carves the solid colour into bead shapes for O(1) cost.
+  // Cached in texRef; rebuilt only when bead size / spacing / technique / gap
+  // colour change — never per frame. We draw a padded range of cells (−2..3 cols,
+  // −2..5 rows) and let the canvas clip to one period; because the lattice is
+  // exactly periodic over the tile, the clipped window tiles seamlessly. tiltFor
+  // and beadExists aren't periodic-safe for negative indices, so existence/tilt
+  // come from the canonical cell (col mod 2, row mod 4) while the DRAW position
+  // uses the true col/row (with the correct odd-row offset sign).
+  const texRef = useRef({ key: '', canvas: null, sx: 1, sy: 1 })
+  const beadTexture = useCallback((gapColor) => {
+    const tileWdoc = 2 * geo.Px
+    const tileHdoc = 4 * geo.Py
+    const res = TILE_BEAD_PX / Bw // offscreen px per doc unit
+    const pw = Math.max(1, Math.round(tileWdoc * res))
+    const ph = Math.max(1, Math.round(tileHdoc * res))
+    const drawScale = 1 + pack * (PACKED_DRAW - 1)
+    const dw = Bw * drawScale
+    const dh = Bh * drawScale
+    const key = [tech.id, pw, ph, dw.toFixed(2), dh.toFixed(2), gapColor].join('|')
+    if (texRef.current.key === key) return texRef.current
+    const cv = document.createElement('canvas')
+    cv.width = pw
+    cv.height = ph
+    const octx = cv.getContext('2d')
+    // draw in doc-local units (pw px maps to tileWdoc doc units, exactly, so
+    // rounding pw/ph can't drift the pattern across many repeats)
+    octx.setTransform(pw / tileWdoc, 0, 0, ph / tileHdoc, 0, 0)
+    octx.fillStyle = gapColor
+    octx.fillRect(0, 0, tileWdoc, tileHdoc)
+    const holes = new Path2D()
+    for (let row = -2; row <= 5; row++) {
+      const canonRow = ((row % 4) + 4) % 4
+      const odd = ((row % 2) + 2) % 2 // true odd-row parity (offset sign)
+      for (let col = -2; col <= 3; col++) {
+        const canonCol = ((col % 2) + 2) % 2
+        if (!tech.beadExists(canonCol, canonRow)) continue
+        const cx = col * geo.Px + odd * (geo.Px / 2)
+        const cy = row * geo.Py
+        tech.beadOutline(holes, cx, cy, dw, dh, tech.tiltFor(canonCol, canonRow))
+      }
+    }
+    octx.globalCompositeOperation = 'destination-out'
+    octx.fillStyle = '#000'
+    octx.fill(holes)
+    octx.globalCompositeOperation = 'source-over'
+    texRef.current = { key, canvas: cv, sx: tileWdoc / pw, sy: tileHdoc / ph }
+    return texRef.current
+  }, [geo, Bw, Bh, pack, tech])
 
   // ---- background & image layers ----
   // The bottom layer (layers[0], type 'bg') is the solid background colour; hide
@@ -1158,6 +1223,20 @@ export default function Home() {
       const aId = activeId
       const beadMapOf = (lay) => (lay.id === aId ? liveBeads : lay.beads)
       const imageShowing = visLayers.some((l) => l.type === 'image' && l.img)
+      // Bead-texture overlay: on in the rects (fast) regime, when beads are big
+      // enough to read a shape, and not over a reference image (which must stay
+      // visible for tracing). It reinstates the woven look the ovals give when
+      // zoomed in. When on, we force the colour base to rects so the tile carves
+      // clean shapes, and we track the filled beads' bounding box so the overlay
+      // paints only where beads are (not over empty/transparent canvas).
+      const texActive = simple && onScreenBw >= TEX_MIN_PX && !imageShowing
+      let bxMin = Infinity, bxMax = -Infinity, byMin = Infinity, byMax = -Infinity
+      const growBounds = (col, row) => {
+        if (col < bxMin) bxMin = col
+        if (col > bxMax) bxMax = col
+        if (row < byMin) byMin = row
+        if (row > byMax) byMax = row
+      }
       // Which cells end up filled in ANY visible layer (so the empty-outline pass
       // can skip them). Numeric id, not a "col,row" string, to avoid allocating a
       // key per cell in the hot loop. Populated as we draw the beads below.
@@ -1203,6 +1282,7 @@ export default function Home() {
             if (col < c0 || col >= c1 || row < r0 || row >= r1) continue
             if (isActive && placing?.hide?.has(k)) continue
             filledCells.add(cellId(col, row))
+            if (texActive) growBounds(col, row)
             const { cx, cy } = geo.centerFor(col, row)
             rectCell(pathFor(fill), cx, cy, row)
           }
@@ -1218,9 +1298,11 @@ export default function Home() {
             if (col < c0 || col >= c1 || row < r0 || row >= r1) continue
             if (isActive && placing?.hide?.has(k)) continue
             filledCells.add(cellId(col, row))
+            if (texActive) growBounds(col, row)
             vis.push(col, row, fill)
           }
-          const asRect = vis.length / 3 > 2000
+          // force rects when the texture is on, so the tile carves clean shapes
+          const asRect = texActive || vis.length / 3 > 2000
           for (let i = 0; i < vis.length; i += 3) {
             const col = vis[i], row = vis[i + 1], fill = vis[i + 2]
             const { cx, cy } = geo.centerFor(col, row)
@@ -1232,6 +1314,32 @@ export default function Home() {
         for (const [fill, p] of byColor) {
           ctx.fillStyle = fill
           ctx.fill(p)
+        }
+      }
+
+      // bead-texture overlay: carve the flat colour rects into bead shapes with a
+      // single pattern fill. The pattern is anchored to the lattice origin
+      // (padX/padY) and scaled from tile-px back to doc units, so its beads land
+      // exactly on the colour cells. Painted only over the filled beads' bounding
+      // box (in doc space) so empty/transparent canvas keeps showing through.
+      if (texActive && bxMax >= bxMin) {
+        const gapColor = bgL && bgL.visible ? bgL.color : '#efece6'
+        const tex = beadTexture(gapColor)
+        const pat = ctx.createPattern(tex.canvas, 'repeat')
+        pat.setTransform(new DOMMatrix([tex.sx, 0, 0, tex.sy, geo.padX, geo.padY]))
+        // filled-cell bbox → doc rectangle (pad by a bead so tilted edge beads
+        // aren't clipped), clamped to the canvas and the visible region
+        const c0d = geo.centerFor(bxMin, 0).cx - geo.Px
+        const c1d = geo.centerFor(bxMax, 1).cx + geo.Px
+        const r0d = geo.centerFor(0, byMin).cy - geo.Py
+        const r1d = geo.centerFor(0, byMax).cy + geo.Py
+        const rx0 = Math.max(0, docLeft, c0d)
+        const ry0 = Math.max(0, docTop, r0d)
+        const rx1 = Math.min(docW, docRight, c1d)
+        const ry1 = Math.min(docH, docBottom, r1d)
+        if (rx1 > rx0 && ry1 > ry0) {
+          ctx.fillStyle = pat
+          ctx.fillRect(rx0, ry0, rx1 - rx0, ry1 - ry0)
         }
       }
 
@@ -1337,7 +1445,7 @@ export default function Home() {
         ctx.restore()
       }
     },
-    [viewport, view, geo, beads, layers, activeId, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing, tech, canvasCm]
+    [viewport, view, geo, beads, layers, activeId, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing, tech, canvasCm, beadTexture]
   )
 
   // Fast stroke repaint: blit the scene snapshot taken at stroke start, then draw

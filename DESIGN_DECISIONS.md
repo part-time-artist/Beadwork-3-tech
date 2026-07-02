@@ -540,3 +540,39 @@ IMPLEMENTED 2026-06-30 (`src/App.jsx`, `src/lib/chart.js`):
      ~40k beads, so serialising every layer's beads doesn't run on every stroke.
   Verified `scripts/drawundo.mjs` (freehand draw→undo→redo bead counts correct).
   Still wants an on-device iPad retest to confirm the crash is gone.
+
+IMPLEMENTED 2026-07-02 (`src/App.jsx`) — **bead-texture overlay** (the woven look
+at all zooms, agreed next feature):
+- Problem: the LOD fix draws the zoomed-out/mid-zoom view as flat colour rects
+  (filling ~14k ovals froze the tab ~4.5s), so the weave shape was lost until you
+  zoomed in. Solution = the user's own idea: draw colour fast as cells (O(beads))
+  + lay ONE repeating bead-shape tile over the top (O(1), independent of bead
+  count) via `createPattern`.
+- `beadTexture(gapColor)` bakes a tiny tile = the lattice motif, which repeats
+  every **2 cols × 4 rows** (spans apex + both base rows AND both ±45° tilts). The
+  tile is filled with the thread/gap colour and every bead silhouette is punched
+  OUT (`destination-out` → transparent). Cached in `texRef`; rebuilt only when
+  bead size / spacing / technique / gap colour change — never per frame.
+- Alignment: a padded cell range (−2..3 × −2..5) is drawn and the canvas clips to
+  one exact period, so the window tiles seamlessly. `tiltFor`/`beadExists` aren't
+  periodic-safe for negatives, so existence/tilt read the **canonical** cell
+  (`col mod 2`, `row mod 4`) while the draw position uses the true col/row with the
+  correct odd-row offset sign. Exact `sx/sy = tileDoc/tilePx` avoids rounding drift.
+- Applied in `drawScene` when `texActive = simple && onScreenBw ≥ 2.5 && !imageShowing`
+  (rects regime, beads big enough to read, no reference image to protect). Forces
+  the colour base to rects, tracks the filled beads' bbox, and fills the pattern
+  over that bbox∩canvas∩visible in ONE `fillRect` anchored at `padX/padY`. Gap
+  colour = the visible bg layer's colour (else a neutral). Below 2.5 px it's a
+  solid-colour overview (correct — no shape is visible that far out); above ~6 px
+  the real sharp ovals return.
+- Chosen texture style (asked the designer): **negative-space / gap** — thread
+  gaps carve the colour block into beads (most faithful to `assets/Frame 2.png`),
+  not outlines-only or 3D shading.
+- Known minor artifact: apex rects are drawn double-wide, so at a shape's edge the
+  colour can bleed ~1 cell into empty gaps → a faint half-bead of colour at edges
+  in rects mode only (exact in oval mode). Acceptable; note if it bothers.
+- Verified: `scripts/beadtex.mjs` (100×100 filled → at 32% zoom the sample is 25%
+  gap + 68% bead colour = woven, not a flat block; worst long-task 295ms; no
+  errors) and a texture-vs-ovals crop comparison across the 6px threshold showed
+  the tile registers exactly onto the real lattice. Also re-verified the Jul-1
+  render fixes: `scripts/perf100.mjs` (235,155 beads, no freeze, no errors).
