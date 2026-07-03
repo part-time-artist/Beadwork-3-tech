@@ -601,3 +601,23 @@ IMPLEMENTED 2026-07-02 (`src/lib/chart.js`, `src/App.jsx`) — **fast PNG export
   exports in ~3.6s (was >45s / effectively hung), worst main-thread task 271ms
   (was a single ~3.6s block before yielding), valid 3648×4113 PNG, legend count
   matches (#F3CEDE ×37698), no errors.
+
+IMPLEMENTED 2026-07-03 (`src/App.jsx`) — **snappy zoom/pan** (drill item #3,
+responsiveness):
+- Problem: every zoom/pan step re-ran `drawScene`, which re-iterates every placed
+  bead — ~100ms/frame on a filled 100×100 (~10fps, "doesn't feel clean/fast").
+- Fix: cache the last full render (`sceneCacheRef`) + the view it was drawn at
+  (`cacheViewRef`). While a gesture is active (`interactingRef`), the rAF chooser
+  in `drawRef` calls `drawBlit` — ONE `drawImage` of the cached bitmap under the
+  transform delta `devMat(view) · devMat(cacheView)⁻¹` (a DOMMatrix) — instead of
+  `drawScene`. ~100ms → ~1ms per frame. It settles to a crisp full render (which
+  refreshes the cache) ~130ms after the gesture stops (`beginInteract` debounce).
+- Wiring: `beginInteract()` is called from the wheel listener (via
+  `beginInteractRef`), the pan branch, and the pinch branch of `onPointerMove`.
+  The scene-repaint effect now goes through `requestRedraw()` so it uses the same
+  fast/blit/full chooser. Same pattern as the existing `drawStrokeFast` snapshot.
+- Tradeoff: area revealed mid-gesture (zoom-out / pan past the old viewport) is
+  blank until the ~130ms settle — invisible for a normal quick gesture.
+- Verified `scripts/zoompan.mjs`: a rapid 18-step zoom burst + pan on a filled
+  100×100 produced ZERO long-tasks (was ~37 × ~100ms), and the settled view is a
+  crisp woven render (24.7% gap at 40% zoom), no errors.

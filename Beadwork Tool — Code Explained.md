@@ -491,3 +491,16 @@ Four guards keep it under the line:
   alive instead of looking crashed. Result: a fully-filled 40×40 cm chart (~37,700
   beads) went from *over 45 seconds of frozen tab* to about **3.6 seconds, with no
   freeze** (verified by `scripts/exportperf.mjs`).
+- **Zoom and pan feel instant now** (`drawBlit` + `beginInteract` in `App.jsx`).
+  Every time you zoomed or panned, the app used to redraw the *entire* picture
+  from scratch — on a big full canvas that's ~100 milliseconds a frame, so
+  dragging felt sticky (~10 frames a second). The fix borrows the same idea as the
+  fast drawing: while you're actively zooming/panning, the app takes the picture it
+  *already* drew a moment ago and simply **slides/scales that same image** to match
+  your gesture — one cheap paint instead of redrawing thousands of beads. The
+  moment you stop (about a tenth of a second later) it does one proper, crisp
+  redraw so everything is sharp again. So the live gesture is buttery and the
+  resting image is exact. The only cosmetic cost: any *newly revealed* area (when
+  you zoom out or pan past what was on screen) is briefly blank until that crisp
+  redraw a split-second later. Measured: a fast zoom on a filled 100×100 cm canvas
+  went from ~37 slow frames to **zero** (verified by `scripts/zoompan.mjs`).

@@ -1102,6 +1102,14 @@ export default function Home() {
   const strokeCacheRef = useRef(null)   // offscreen canvas: scene at stroke start
   const strokePaintedRef = useRef(null) // Set of "col,row" keys painted this stroke
   const fastStrokeRef = useRef(false)   // true while a freehand DRAW stroke is active
+  // Fast zoom/pan: cache the last full render + the view it was drawn at, then
+  // during an active gesture just re-blit that bitmap under the new view instead
+  // of re-running drawScene (see below).
+  const sceneCacheRef = useRef(null)    // offscreen canvas: last full render (device px)
+  const cacheViewRef = useRef(null)     // the view that cache was rendered at
+  const interactingRef = useRef(false)  // true during a live zoom/pan/pinch gesture
+  const interactEndRef = useRef(0)      // settle timer id
+  const beginInteractRef = useRef(null) // latest beginInteract (for the wheel listener)
   // Devices with a real pointer (mouse/trackpad) report `hover: hover`; touch
   // screens (iPad) report `hover: none`. The hover ghost is mouse-only, so on
   // touch we never create its overlay canvas — that spare full-screen canvas was
@@ -1486,8 +1494,58 @@ export default function Home() {
     },
     [viewport, view, DPR, pack, Bw, Bh, geo, tech, tiltFor, color]
   )
-  // rAF repaint uses the fast path mid-stroke, the full scene otherwise
-  drawRef.current = (ctx) => (fastStrokeRef.current ? drawStrokeFast(ctx) : drawScene(ctx))
+  // ---- fast zoom/pan: blit the last full render, transformed, during a gesture -
+  // A full drawScene on a big canvas re-iterates every placed bead (~100ms on a
+  // filled 100×100), so live zoom/pan crawled at ~10fps. Instead we keep the last
+  // crisp render in sceneCacheRef and, while a gesture is active, re-blit that one
+  // bitmap under the new view (a single drawImage with the view delta as the
+  // transform) — then settle to a real full render ~130ms after the gesture stops.
+  const devMat = (v) => {
+    const c = Math.cos(v.rot || 0)
+    const s = Math.sin(v.rot || 0)
+    const k = DPR * v.scale
+    return new DOMMatrix([k * c, k * s, -k * s, k * c, v.tx * DPR, v.ty * DPR])
+  }
+  const captureCache = (canvas) => {
+    let cv = sceneCacheRef.current
+    if (!cv) { cv = document.createElement('canvas'); sceneCacheRef.current = cv }
+    if (cv.width !== canvas.width || cv.height !== canvas.height) { cv.width = canvas.width; cv.height = canvas.height }
+    const cx = cv.getContext('2d')
+    cx.setTransform(1, 0, 0, 1, 0, 0)
+    cx.clearRect(0, 0, cv.width, cv.height)
+    cx.drawImage(canvas, 0, 0)
+    cacheViewRef.current = view
+  }
+  const drawSceneFull = (ctx) => { drawScene(ctx); captureCache(ctx.canvas) }
+  const drawBlit = (ctx) => {
+    const cache = sceneCacheRef.current
+    const cv = cacheViewRef.current
+    if (!cache || !cv) { drawSceneFull(ctx); return }
+    // map cached device pixels → their new on-screen place: newView ∘ cacheView⁻¹.
+    // Revealed area (zoom-out / pan past the old viewport) stays blank until the
+    // settle render — invisible for a quick gesture.
+    const A = devMat(view).multiply(devMat(cv).inverse())
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+    ctx.setTransform(A.a, A.b, A.c, A.d, A.e, A.f)
+    ctx.drawImage(cache, 0, 0)
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+  }
+  const beginInteract = () => {
+    interactingRef.current = true
+    clearTimeout(interactEndRef.current)
+    interactEndRef.current = setTimeout(() => {
+      interactingRef.current = false
+      requestRedraw() // settle: a crisp full render that also refreshes the cache
+    }, 130)
+  }
+  beginInteractRef.current = beginInteract
+
+  // rAF repaint: fast stroke path mid-draw, blit mid-gesture, else full + cache
+  drawRef.current = (ctx) =>
+    fastStrokeRef.current ? drawStrokeFast(ctx)
+      : interactingRef.current ? drawBlit(ctx)
+        : drawSceneFull(ctx)
 
   // Overlay repaint: just the brush hover ghost, in the SAME document transform
   // as the scene so it lands on the exact cells the brush would paint. Cheap, so
@@ -1532,11 +1590,11 @@ export default function Home() {
     }
   }, [viewport, DPR])
 
-  // redraw whenever the scene changes
+  // redraw whenever the scene OR view changes — via the rAF chooser so a live
+  // zoom/pan uses the fast blit path and a settled view gets the full render.
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (canvas) drawScene(canvas.getContext('2d'))
-  }, [drawScene])
+    requestRedraw()
+  }, [drawScene, requestRedraw])
 
   // keep the ghost aligned when the view (zoom/pan/rotate) or size changes
   useEffect(() => {
@@ -1594,6 +1652,7 @@ export default function Home() {
         imageZoomAtRef.current(e.deltaY < 0 ? 1.08 : 1 / 1.08, sx, sy)
         return
       }
+      beginInteractRef.current?.() // fast-blit while wheeling; settle when it stops
       zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, sx, sy)
     }
     canvas.addEventListener('wheel', onWheel, { passive: false })
@@ -1866,6 +1925,7 @@ export default function Home() {
             }, lay.img) }
           })
         } else {
+          beginInteract() // fast-blit while pinching
           setView((v) => {
             const ns = clampNum(v.scale * (dist / g.dist), 0.02, 8)
             const nrot = (v.rot || 0) + (ang - g.ang) // snap happens on lift, not per-frame
@@ -1896,6 +1956,7 @@ export default function Home() {
         const ddy = (-s * dx + c * dy) / view.scale
         updateLayer(adjustLayer.id, (lay) => ({ t: snapImageT({ ...lay.t, x: lay.t.x + ddx, y: lay.t.y + ddy }, lay.img) }))
       } else {
+        beginInteract() // fast-blit while panning
         setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }))
       }
       return
