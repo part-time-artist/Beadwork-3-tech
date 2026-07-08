@@ -27,12 +27,13 @@ export function rasterScale(w, h) {
 
 const key = (c, r) => `${c},${r}`
 
-// Muted chart chrome (no bright accents — spec §7.5).
+// Muted chart chrome (no bright accents — spec §7.5). Tuned to read on a white
+// printed sheet: outlines a clear warm grey, the counting scale a strong dark ink.
 const C = {
-  emptyOutline: '#C7C0B2',
+  emptyOutline: '#B6AF9F',
   filledOutline: 'rgba(46,43,38,0.35)',
-  guide: 'rgba(46,43,38,0.28)',
-  number: '#6B6458',
+  guide: 'rgba(46,43,38,0.30)',
+  number: '#33302A',
 }
 
 // --- numbering direction (DEFERRED weave-order decision lives here only) ------
@@ -133,22 +134,35 @@ export function drawGuides(ctx, { geo, cols, rows, every = GUIDE_EVERY }) {
 export function drawNumbers(ctx, { geo, cols, rows, every = GUIDE_EVERY, mode = 'margin' }) {
   ctx.save()
   ctx.fillStyle = C.number
-  const fs = Math.max(9, geo.Bw * 0.34)
-  ctx.font = `600 ${fs}px -apple-system, 'Segoe UI', sans-serif`
+  ctx.strokeStyle = C.number
+  const fs = Math.max(12, geo.Bw * 0.42)
+  ctx.font = `700 ${fs}px -apple-system, 'Segoe UI', sans-serif`
   ctx.textBaseline = 'middle'
+  ctx.lineWidth = Math.max(1.2, geo.Bw * 0.045)
   const off = mode === 'margin' ? -fs * 0.9 : fs * 0.7
+  const tick = fs * 0.55
+  // A count ruler on the top + left edges: the 1st, every 10th (10, 20, 30…) and
+  // the LAST bead — with a tick per mark — so the artisan reads total rows/columns
+  // and never loses count.
+  const marks = (n) => {
+    const s = new Set([0, n - 1])
+    for (let i = every - 1; i < n; i += every) s.add(i)
+    return [...s].sort((a, b) => a - b)
+  }
   // rows down the left edge
   ctx.textAlign = mode === 'margin' ? 'right' : 'left'
-  for (let r = 0; r < rows; r += every) {
+  for (const r of marks(rows)) {
     const { cy } = geo.centerFor(0, r)
     ctx.fillText(String(rowLabel(r)), off, cy)
+    if (mode === 'margin') { ctx.beginPath(); ctx.moveTo(-3, cy); ctx.lineTo(-3 - tick, cy); ctx.stroke() }
   }
   // columns along the top edge
   ctx.textAlign = 'center'
   ctx.textBaseline = mode === 'margin' ? 'bottom' : 'top'
-  for (let c = 0; c < cols; c += every) {
+  for (const c of marks(cols)) {
     const { cx } = geo.centerFor(c, 0)
     ctx.fillText(String(colLabel(c)), cx, off)
+    if (mode === 'margin') { ctx.beginPath(); ctx.moveTo(cx, -3); ctx.lineTo(cx, -3 - tick); ctx.stroke() }
   }
   ctx.restore()
 }
@@ -177,7 +191,7 @@ export async function renderFullChart({
 }) {
   tech = tech || getTechnique('3bead')
   const geo = makePrintGeo({ cols, rows, printBeadMm, beadRatio, tech })
-  const margin = numbers ? Math.max(11, printBeadMm * PX_PER_MM * 0.5) : 0
+  const margin = numbers ? Math.max(16, printBeadMm * PX_PER_MM * 0.95) : 0
   const W = Math.ceil(margin + geo.width)
   const H = Math.ceil(margin + geo.height)
   const canvas = document.createElement('canvas')

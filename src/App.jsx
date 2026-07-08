@@ -13,20 +13,31 @@ import {
 // ---- design tokens: "Nothing" design language (see .claude/skills/nothing-design).
 // Monochrome black/white/grey + one red accent used sparingly. Dotted-grid chrome,
 // UPPERCASE monospace labels. Artboard stays light so bead colours stay honest.
+// Morii palette (from the Figma "Beads-UI" design). A calm charcoal workspace —
+// dark surround so it never biases the bead colours the designer is judging
+// (spec §7.5) — with a single muted green accent. Active/selected state uses a
+// light tonal fill, not a loud hue.
 const T = {
-  bg: '#000000', // pure black backdrop + sidebar
-  panel: '#000000', // sidebar
-  panelSolid: '#0f0f0f', // section blocks
-  ink: '#f2f2f2', // primary text
-  inkSoft: '#7a7a7a', // muted labels
-  line: '#262626', // hairlines / dotted grid
-  active: '#f2f2f2', // monochrome active = white fill, black text
-  activeInk: '#000000',
-  accent: '#d6001c', // Nothing red — primary action + dots only
-  pill: '#171717', // input / control background
-  artboard: '#f3f3f4', // the canvas (light, for honest colour)
-  radius: 6,
-  mono: "'SFMono-Regular', ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace",
+  bg: '#333332', // Morii Darkest — workspace backdrop
+  panel: '#666664', // Morii Dark — toolbar / rails / drawer
+  panelSolid: '#414140', // section blocks (cards in the drawer)
+  ink: '#f7f7f5', // Morii white-alt — primary text / icons
+  inkSoft: '#a8a7a2', // Morii Lighter — muted labels
+  light: '#757570', // Morii Light — mid grey (reads on light or dark)
+  line: '#575757', // Morii Darker — hairlines
+  active: '#dbdad5', // selected = light tonal fill …
+  activeInk: '#333332', // … with dark text
+  accent: '#4a875d', // Morii Green — primary action + active outline
+  pill: '#575757', // Morii Darker — input / control background
+  thumb: '#a8a7a2', // Morii Lighter — slider thumb / knob
+  track: '#333332', // slider track (sunk into the panel)
+  artboard: '#dbdad5', // Morii Lightest — the canvas
+  radius: 8,
+  // Morii type system — Morii Lipi is the single face used everywhere
+  // (@font-face in src/fonts.css). `mono` and `serif` are legacy token names kept
+  // for the many existing references; both now resolve to Morii Lipi.
+  mono: "'Morii Lipi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  serif: "'Morii Lipi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
 }
 
 const STORAGE_KEY = 'beadwork3_palettes_v1'
@@ -36,12 +47,14 @@ const RECENT_KEY = 'beadwork3_recent_v1' // recently used colours (survives a cr
 // build stamp (injected by Vite; 'dev' when running the dev server)
 const BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'dev'
 
-// Default preset: the user's own 5 colours (2026-06-11) — soft pink,
-// chartreuse, sky blue, bone, deep violet. (Bead colours may be rich; only
-// the UI chrome must stay muted, spec §7.5.)
-const DEFAULT_PALETTE = ['#F3CEDE', '#D8DA5F', '#8BBEDD', '#F4EEDF', '#4A3772']
+// Default preset: the Morii palette from the Figma colour rail — earthy greens
+// through to warm neutrals (rain, mint, parrot, green, alternate, handloom,
+// harda, ecru). (Bead colours may be rich; only the UI chrome stays muted,
+// spec §7.5.)
+const DEFAULT_PALETTE = ['#A3B09A', '#A8C97F', '#7BA23F', '#4A875D', '#006E54', '#E0D7C2', '#D8C49A', '#C0BDB6']
 
 const key = (c, r) => `${c},${r}`
+const newPaletteId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
 
 // The only two bead sizes. Both 4:5 (width:height); stated size = bead width.
 // 1.5mm × PACK_X (1.296) = 1.944mm pitch → exactly 36 beads across 7cm,
@@ -53,12 +66,12 @@ const BEAD_SIZES = [
 
 const HISTORY_MAX = 50 // undo steps (one stroke / fill / selection op = one step)
 
-// New artworks auto-name from the forest (Morii = forest). Pick the next unused
-// name; once the list is exhausted, append a number ("Oak 2"…). Rename anytime.
+// New artworks auto-name from Indian trees (Morii = forest). Pick the next unused
+// name; once the list is exhausted, append a number ("Neem 2"…). Rename anytime.
 const TREE_NAMES = [
-  'Oak', 'Willow', 'Cedar', 'Birch', 'Rowan', 'Alder', 'Hazel', 'Aspen', 'Maple',
-  'Elm', 'Pine', 'Holly', 'Hawthorn', 'Juniper', 'Linden', 'Spruce', 'Larch',
-  'Beech', 'Ash', 'Yew', 'Fern', 'Moss', 'Ivy', 'Bramble', 'Thicket', 'Glade',
+  'Neem', 'Peepal', 'Banyan', 'Ashoka', 'Gulmohar', 'Amaltas', 'Sheesham', 'Sal',
+  'Teak', 'Mahua', 'Kadamba', 'Palash', 'Semal', 'Arjun', 'Bel', 'Jamun', 'Imli',
+  'Champa', 'Chinar', 'Deodar', 'Sandalwood', 'Mango', 'Banana', 'Tamarind', 'Khejri', 'Kachnar',
 ]
 function nextTreeName(usedNames) {
   const used = new Set(usedNames)
@@ -75,6 +88,12 @@ function screenToDoc(sx, sy, v) {
   const c = Math.cos(v.rot || 0)
   const s = Math.sin(v.rot || 0)
   return { x: (c * dx + s * dy) / v.scale, y: (-s * dx + c * dy) / v.scale }
+}
+// inverse of screenToDoc: document point → on-screen (canvas-relative) pixel
+function docToScreen(dx, dy, v) {
+  const c = Math.cos(v.rot || 0)
+  const s = Math.sin(v.rot || 0)
+  return { x: v.scale * (c * dx - s * dy) + v.tx, y: v.scale * (s * dx + c * dy) + v.ty }
 }
 
 // short "last edited" label for the gallery
@@ -107,7 +126,11 @@ const PACKED_DRAW = 1.2
 // TEX_MIN_PX a bead is too small on screen to show any shape, so we skip the
 // overlay and just show solid colour (correct for a far-zoom overview).
 const TILE_BEAD_PX = 12
-const TEX_MIN_PX = 2.5
+// Show the woven-bead (jali) texture even when zoomed right out — including a full
+// 100×100 cm canvas where each bead is only ~1.5-2px on screen. The overlay is one
+// O(1) pattern fill, so keeping it on at far zoom costs nothing; below this a bead
+// is truly sub-pixel and the tile would just alias to noise.
+const TEX_MIN_PX = 1
 
 // Reference images are downscaled to this longest side before storing, so a
 // full-res phone photo can't decode to tens of MB and crash iPad Safari.
@@ -124,6 +147,7 @@ export default function Home() {
   // chooser popup: 'start' on first load (forces a choice), 'new' from the New
   // artwork button (cancellable), or null when closed.
   const [chooser, setChooser] = useState(null)
+  const [unit, setUnit] = useState('cm') // canvas-size display unit: mm | cm | in
 
   // ---- physical model ----
   // Two fixed bead sizes, both 4:5 ratio (width:height). Stated size = bead width.
@@ -196,10 +220,17 @@ export default function Home() {
   const [activeId, setActiveId] = useState(() => firstLayersRef.current.activeId)
   const [beads, setBeads] = useState(() => firstLayersRef.current.layers.find((l) => l.type === 'bead').beads)
   const [showLayers, setShowLayers] = useState(false)
+  const [layerDrag, setLayerDrag] = useState(null) // { id, dy } while dragging a layer row
+  const [showMenu, setShowMenu] = useState(false) // ☰ dropdown menu
+  const [showDetails, setShowDetails] = useState(false) // Artwork Details modal
+  const [showColor, setShowColor] = useState(false) // colour picker panel
+  const [editName, setEditName] = useState(false) // artwork name in edit mode
+  const [exportPick, setExportPick] = useState(null) // Set of artwork ids to export, or null (picker closed)
+  const [editPaletteId, setEditPaletteId] = useState(null) // palette being edited (swatch removal)
   const [tool, setTool] = useState('draw') // draw | erase | select
   const [exporting, setExporting] = useState(false) // "Save PNG" in progress → spinner
-  const [color, setColor] = useState('#F3CEDE') // starts on the palette's pink
-  const [pack, setPack] = useState(0.75) // 0 = spaced (true size) … 1 = max packed; 0.75 ≈ touching
+  const [color, setColor] = useState('#7BA23F') // starts on the palette's parrot green
+  const [pack, setPack] = useState(0) // 0 = true size (one bead = one grid cell, no spill) … 1 = max packed
   const [brush, setBrush] = useState(1) // brush radius in beads
   const [recentColors, setRecentColors] = useState(() => {
     // seed from localStorage so a crash/reload keeps your recent colours
@@ -251,12 +282,36 @@ export default function Home() {
   // the tab killed on iPad Safari.
   const rafRef = useRef(0)
   const drawRef = useRef(null) // latest drawScene (assigned every render below)
+  // crash-hunt timers: how long the last frame took, and the worst ever seen.
+  // A frame that takes multiple SECONDS is a watchdog HANG (iPad Safari kills a
+  // page whose main thread is stuck too long) — looks like an OOM crash but is
+  // really a freeze, and a memory counter can't see it. So we time every frame.
+  const lastRenderMsRef = useRef(0)
+  const peakRenderMsRef = useRef(0)
+  const recordCrumbRef = useRef(null) // stable accessor to the latest recordCrumb
+  // worst main-thread task of the whole session (via PerformanceObserver) — catches
+  // EVERY freeze, not just canvas rendering: React re-renders, undo snapshots, and
+  // the auto-save serialisation all show up here where the render timer is blind.
+  const worstTaskRef = useRef(0)
+  const taskCountRef = useRef(0)
+  const commitCountRef = useRef(0) // committed strokes this session (session-length gauge)
+  // Safari has NO longtask API, so worstTaskRef reads 0 on iPad. This rAF-gap
+  // meter works on EVERY engine: the browser calls the frame callback ~every
+  // 16ms, so a big gap between calls = the main thread was frozen that long.
+  // This is the freeze number that will actually mean something on the iPad.
+  const worstGapRef = useRef(0)
   const requestRedraw = useCallback(() => {
     if (rafRef.current) return
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = 0
       const canvas = canvasRef.current
-      if (canvas && drawRef.current) drawRef.current(canvas.getContext('2d'))
+      if (canvas && drawRef.current) {
+        const t0 = performance.now()
+        drawRef.current(canvas.getContext('2d'))
+        const ms = performance.now() - t0
+        lastRenderMsRef.current = ms
+        if (ms > peakRenderMsRef.current) peakRenderMsRef.current = ms
+      }
     })
   }, [])
 
@@ -396,9 +451,18 @@ export default function Home() {
     setBeads(l.beads)
   }
 
+  // Next "Layer N" name: one past the highest existing number (ignores the
+  // Background/image layers so counting them never skips or duplicates).
+  const nextLayerName = () => {
+    const nums = layersRef.current
+      .map((l) => /^Layer (\d+)$/.exec(l.name)?.[1])
+      .filter(Boolean)
+      .map(Number)
+    return `Layer ${(nums.length ? Math.max(...nums) : 0) + 1}`
+  }
   const addLayer = () => {
     pushHistory(currentDoc())
-    const l = makeLayer(`Layer ${layersRef.current.length + 1}`)
+    const l = makeLayer(nextLayerName())
     const idx = layersRef.current.findIndex((x) => x.id === activeIdRef.current)
     const nl = [...layersRef.current]
     nl.splice(idx + 1, 0, l) // insert just above the active layer
@@ -482,6 +546,22 @@ export default function Home() {
     nl.splice(j, 0, m)
     layersRef.current = nl
     setLayers(nl)
+  }
+
+  // Hold-and-drag reorder: move a layer to an absolute stack index, clamped so the
+  // background stays pinned at index 0 (nothing may sit below it).
+  const reorderLayer = (id, toIndex) => {
+    const nl = [...layersRef.current]
+    const idx = nl.findIndex((l) => l.id === id)
+    if (idx < 0 || nl[idx].type === 'bg') return
+    const clamped = Math.max(1, Math.min(nl.length - 1, toIndex))
+    if (clamped === idx) return
+    pushHistory(currentDoc())
+    const [m] = nl.splice(idx, 1)
+    nl.splice(clamped, 0, m)
+    layersRef.current = nl
+    setLayers(nl)
+    requestRedraw()
   }
 
   const renameLayer = (id, name) => {
@@ -648,6 +728,7 @@ export default function Home() {
 
   // Add a reference photo as a new image layer above the active layer, then
   // jump straight into Adjust mode to place it (it starts contain-fit, centred).
+  const imgInputRef = useRef(null)
   const addImageLayer = (file) => {
     if (!file) return
     const reader = new FileReader()
@@ -697,28 +778,86 @@ export default function Home() {
     reader.readAsDataURL(file)
   }
 
+  // Layer-row gesture: quick tap = select; hold-and-drag = reorder the stack;
+  // long-press (still) = add a reference image onto that layer. Row height (px)
+  // maps a drag distance to how many stack positions to move.
+  const LAYER_ROW_H = 72
+  // Layer-row gesture: quick tap = select; hold-and-drag = reorder the stack.
+  // (Adding an image is the photo button in the Layers header — easier than a hold.)
+  const onLayerRowDown = (e, l) => {
+    if (e.button != null && e.button !== 0) return
+    const startY = e.clientY
+    const startIdx = layersRef.current.findIndex((x) => x.id === l.id)
+    let moved = false
+    const move = (ev) => {
+      const dy = ev.clientY - startY
+      if (!moved && Math.abs(dy) > 6) moved = true
+      if (moved) setLayerDrag({ id: l.id, dy })
+    }
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      if (moved) {
+        // dragging DOWN the visual list moves the layer DOWN the stack (lower index)
+        const steps = Math.round((ev.clientY - startY) / LAYER_ROW_H)
+        if (steps) reorderLayer(l.id, startIdx - steps)
+        setLayerDrag(null)
+      } else {
+        switchLayer(l.id)
+      }
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+  }
+
   // ---- printed-chart settings ----
   const [printBeadMm, setPrintBeadMm] = useState(8) // fixed bead size on paper (mm)
   const [exportBg, setExportBg] = useState('transparent') // transparent | screen
   const beadRatio = beadMM.h / beadMM.w
 
   // ---- palettes ----
-  const [palette, setPalette] = useState(DEFAULT_PALETTE)
+  const [palette, setPalette] = useState(DEFAULT_PALETTE) // legacy; kept for save/load compat
   const [savedPalettes, setSavedPalettes] = useState([])
+  const [activePaletteId, setActivePaletteId] = useState(null)
 
+  // Load palettes (assigning ids to any legacy entries). Seed one default palette
+  // from the Morii colours on first run so the rail is never empty.
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (raw) setSavedPalettes(JSON.parse(raw))
-    } catch (e) {}
+    let list = []
+    try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) list = JSON.parse(raw) || [] } catch (e) {}
+    list = list.map((p) => (p.id ? p : { ...p, id: newPaletteId() }))
+    if (list.length === 0) list = [{ id: newPaletteId(), name: 'Morii', colors: DEFAULT_PALETTE }]
+    setSavedPalettes(list)
+    setActivePaletteId(list[0].id)
   }, [])
 
-  const persistPalettes = (list) => {
+  const persistPalettes = (list, active) => {
     setSavedPalettes(list)
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
-    } catch (e) {}
+    if (active !== undefined) setActivePaletteId(active)
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)) } catch (e) {}
   }
+  // Named colour palettes: newest on top, max 8 swatches each. The right rail
+  // shows the ACTIVE palette; picking one in the colour picker makes it active,
+  // and the rail's + adds the current colour to it.
+  const addPalette = () => {
+    const p = { id: newPaletteId(), name: `Palette ${savedPalettes.length + 1}`, colors: color ? [color] : [] }
+    persistPalettes([p, ...savedPalettes], p.id) // new palette on top + active
+  }
+  const renamePalette = (id, name) =>
+    persistPalettes(savedPalettes.map((p) => (p.id === id ? { ...p, name } : p)))
+  const deletePalette = (id) => {
+    const next = savedPalettes.filter((p) => p.id !== id)
+    persistPalettes(next, id === activePaletteId ? (next[0]?.id ?? null) : undefined)
+  }
+  const addToPalette = (id) =>
+    persistPalettes(savedPalettes.map((p) =>
+      (p.id === id && p.colors.length < 8 && !p.colors.includes(color)) ? { ...p, colors: [...p.colors, color] } : p))
+  const removeFromPalette = (id, j) =>
+    persistPalettes(savedPalettes.map((p) => (p.id === id ? { ...p, colors: p.colors.filter((_, x) => x !== j) } : p)))
+  const activePalette =
+    savedPalettes.find((p) => p.id === activePaletteId) || savedPalettes[0] || { id: null, name: '', colors: [] }
 
   // ---- mutate beads ----
   const floodFill = useCallback(
@@ -802,6 +941,7 @@ export default function Home() {
           if (!map.has(k)) continue
           if (map === strokeBase.current) { map = new Map(map); beadsRef.current = map }
           map.delete(k); changed = true
+          if (fastEraseRef.current) strokeErasedRef.current.add(k)
         } else {
           if (map.get(k) === color) continue
           if (alpha && !map.has(k)) continue // only recolour existing beads
@@ -923,6 +1063,44 @@ export default function Home() {
       return next
     })
     setSelection(nextSel)
+  }
+
+  // ---- mirror preview: show a flipped copy on each of the 4 sides; tap one to
+  // place it. Each ghost is the selection mirrored on that side (clamped to the
+  // in-bounds, existing cells). `mirrorGhosts` = [{ dir, side, cells, cx, cy }].
+  const [mirrorGhosts, setMirrorGhosts] = useState(null)
+  const openMirror = () => {
+    if (!selection.size || !canEdit) return
+    const cells = []
+    for (const k of selection) {
+      const fill = beadsRef.current.get(k)
+      if (!fill) continue
+      const [col, row] = k.split(',').map(Number)
+      cells.push({ col, row, fill })
+    }
+    if (!cells.length) return
+    const variants = []
+    for (const [dir, side] of [['h', -1], ['h', 1], ['v', -1], ['v', 1]]) {
+      const mc = tech.mirror(cells, dir, side).filter(
+        ({ col, row }) => col >= 0 && col < cols && row >= 0 && row < rows && tech.beadExists(col, row)
+      )
+      if (!mc.length) continue
+      // centre (doc px) of this ghost, for positioning its tap button
+      let sx = 0, sy = 0
+      for (const { col, row } of mc) { const c = geo.centerFor(col, row); sx += c.cx; sy += c.cy }
+      variants.push({ dir, side, cells: mc, cx: sx / mc.length, cy: sy / mc.length })
+    }
+    if (variants.length) setMirrorGhosts(variants)
+  }
+  const applyMirror = (variant) => {
+    const nextSel = new Set()
+    commit((prev) => {
+      const next = new Map(prev)
+      for (const { col, row, fill } of variant.cells) { const k = key(col, row); next.set(k, fill); nextSel.add(k) }
+      return next
+    })
+    setSelection(nextSel)
+    setMirrorGhosts(null)
   }
 
   // ---- duplicate / move & place ----------------------------------------------
@@ -1102,6 +1280,25 @@ export default function Home() {
   const strokeCacheRef = useRef(null)   // offscreen canvas: scene at stroke start
   const strokePaintedRef = useRef(null) // Set of "col,row" keys painted this stroke
   const fastStrokeRef = useRef(false)   // true while a freehand DRAW stroke is active
+  // ERASE fast path (mirror of the draw one): erasing can't just stamp on top —
+  // it must REVEAL what's under the erased bead. So at stroke start we also render
+  // an "erase floor" = the scene with the active layer hidden (bg + other layers +
+  // empty outlines). Each frame we blit the full snapshot, then reveal the floor
+  // ONLY through the erased cells. Without this, erasing on a dense design
+  // full-repaints every bead every frame → the sustained freeze that kills iPad.
+  const eraseFloorRef = useRef(null)        // offscreen canvas: scene with active layer hidden
+  const strokeErasedRef = useRef(null)      // Set of "col,row" keys erased this stroke
+  const fastEraseRef = useRef(false)        // true while a fast ERASE stroke is active
+  const hideActiveForFloorRef = useRef(false) // drawScene skips the active layer when true
+  // Stroke COMMIT optimisation: after a fast stroke the canvas already shows the
+  // final result, so the full repaint that setBeads triggers is redundant — and on
+  // a big design that repaint is a 0.5–1.7s freeze (per stroke!) that stacks up and
+  // trips the iPad watchdog. When the on-screen pixels already match a true render
+  // (fast path, texture overlay off), we skip that repaint and just refresh the
+  // zoom cache. lastTexActiveRef records whether the last full render used the
+  // texture overlay (depends only on zoom, unchanged during a stroke).
+  const skipCommitRenderRef = useRef(false)
+  const lastTexActiveRef = useRef(false)
   // Fast zoom/pan: cache the last full render + the view it was drawn at, then
   // during an active gesture just re-blit that bitmap under the new view instead
   // of re-running drawScene (see below).
@@ -1136,6 +1333,136 @@ export default function Home() {
     x.fillStyle = '#f3f3f4'; x.fillRect(0, 0, 16, 16)
     x.fillStyle = '#e3e3e5'; x.fillRect(0, 0, 8, 8); x.fillRect(8, 8, 8, 8)
     return c
+  }, [])
+
+  // ── Canvas-memory probe (iPad crash hunt, 2026-07-06) ────────────────────
+  // iOS Safari kills the tab when the TOTAL backing store of ALL canvases put
+  // together crosses ~256–384 MB. That memory is NOT the JS heap — so
+  // performance.memory (which only sees the heap) stays tiny even as the
+  // canvases fill up. That's the reading that fooled us into thinking past
+  // crashes weren't memory. Here we sum every canvas we hold (width×height×4
+  // bytes each) and show it live, so we can watch the number climb toward the
+  // ceiling right before a crash and finally SEE the cause.
+  const [canvasMB, setCanvasMB] = useState(0)
+  const [recovered, setRecovered] = useState(null) // last-state crumb after a crash
+  const lastActionRef = useRef('boot')             // most recent meaningful action
+  const lastErrRef = useRef(null)                  // last thrown error/rejection
+
+  // Sum every canvas backing store we hold (width×height×4 bytes each).
+  const measureCanvasBytes = () => {
+    const b = (cv) => (cv && cv.width && cv.height ? cv.width * cv.height * 4 : 0)
+    let bytes = b(canvasRef.current) + b(overlayRef.current) + b(strokeCacheRef.current)
+      + b(sceneCacheRef.current) + b(texRef.current && texRef.current.canvas) + b(checkerTile)
+    for (const l of (layersRef.current || [])) {   // uploaded reference photos
+      const img = l && l.img
+      if (img && img.width && img.height) bytes += img.width * img.height * 4
+    }
+    return bytes
+  }
+
+  // ── Crash breadcrumb ─────────────────────────────────────────────────────
+  // A hang or an OOM tab-kill leaves NO console trace — the tab just vanishes.
+  // So we stash a tiny snapshot of what the app is doing into localStorage,
+  // which survives the reload. After a crash we read the LAST state before
+  // death (canvas MB, bead count, worst frame time = hang detector, any error)
+  // and finally SEE the cause instead of guessing a fourth time.
+  const recordCrumb = (action) => {
+    if (action) lastActionRef.current = action
+    if (action === 'draw-commit') commitCountRef.current++
+    try {
+      const beads = (layersRef.current || []).reduce((n, l) => n + (l.beads ? l.beads.size : 0), 0)
+      const cv = canvasRef.current
+      localStorage.setItem('bw_crumb', JSON.stringify({
+        t: Date.now(),
+        action: lastActionRef.current,
+        mb: Math.round(measureCanvasBytes() / 1048576),
+        beads,
+        peakFrameMs: Math.round(peakRenderMsRef.current),
+        worstGapMs: Math.round(worstGapRef.current),   // worst freeze (works on Safari!)
+        worstTaskMs: Math.round(worstTaskRef.current), // worst freeze of ANY kind (Chromium only)
+        taskCount: taskCountRef.current,               // how many freezes >50ms
+        commits: commitCountRef.current,               // committed strokes this session
+        undoDepth: undoStack.current ? undoStack.current.length : 0,
+        canvasPx: cv ? `${cv.width}×${cv.height}` : '?',
+        dpr: DPR,
+        err: lastErrRef.current,
+        build: BUILD_ID,
+      }))
+    } catch (e) {}
+  }
+  recordCrumbRef.current = recordCrumb // so handlers defined elsewhere can call it
+
+  useEffect(() => {
+    // capture any thrown error / rejected promise into the next crumb
+    const onErr = (e) => {
+      lastErrRef.current = String((e && (e.message || e.reason)) || 'error').slice(0, 160)
+      recordCrumb('error')
+    }
+    window.addEventListener('error', onErr)
+    window.addEventListener('unhandledrejection', onErr)
+    // Observe EVERY long main-thread task (>50ms) — render, React, undo, autosave.
+    // This is the meter the render timer lacks: if the tab dies with a huge
+    // worstTaskMs, a non-render freeze is the cause; if worstTaskMs stays small
+    // yet it still crashed, it's memory (OOM), which leaves no freeze at all.
+    let taskObs = null
+    try {
+      taskObs = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          taskCountRef.current++
+          if (e.duration > worstTaskRef.current) worstTaskRef.current = e.duration
+        }
+      })
+      taskObs.observe({ entryTypes: ['longtask'] })
+    } catch (e) {}
+    // cross-engine freeze meter (works on Safari): largest gap between frames
+    let rafId = 0, lastFrame = performance.now()
+    const frameTick = (t) => {
+      const gap = t - lastFrame
+      if (gap > worstGapRef.current) worstGapRef.current = gap
+      lastFrame = t
+      rafId = requestAnimationFrame(frameTick)
+    }
+    rafId = requestAnimationFrame(frameTick)
+    // 'bw_alive' stays '1' while running; a clean exit sets it '0'. If it's still
+    // '1' on the NEXT boot, the previous session died without a clean exit.
+    const markClean = () => { try { localStorage.setItem('bw_alive', '0') } catch (e) {} }
+    try {
+      if (localStorage.getItem('bw_alive') === '1') {
+        const c = JSON.parse(localStorage.getItem('bw_crumb') || 'null')
+        if (c) setRecovered(c)
+      }
+      localStorage.setItem('bw_alive', '1')
+    } catch (e) {}
+    window.addEventListener('pagehide', markClean)
+    window.addEventListener('beforeunload', markClean)
+
+    const sample = () => {
+      setCanvasMB(Math.round(measureCanvasBytes() / 1048576))
+      recordCrumb()
+      // Reclaim the big stroke-snapshot canvases when NOT mid-stroke: strokeCache
+      // and the erase floor are only needed during a stroke, but at retina DPR
+      // they're ~8MB each just sitting there between strokes — dead weight that
+      // pushes iPad Safari toward its memory-kill ceiling. Freeing them (0×0)
+      // when idle gives that memory back; the next stroke reallocates cheaply.
+      if (!dragging.current) {
+        for (const ref of [strokeCacheRef, eraseFloorRef]) {
+          const cv = ref.current
+          if (cv && (cv.width || cv.height)) { cv.width = 0; cv.height = 0 }
+        }
+      }
+    }
+    sample()
+    const id = setInterval(sample, 400)
+    return () => {
+      clearInterval(id)
+      window.removeEventListener('error', onErr)
+      window.removeEventListener('unhandledrejection', onErr)
+      window.removeEventListener('pagehide', markClean)
+      window.removeEventListener('beforeunload', markClean)
+      if (taskObs) taskObs.disconnect()
+      if (rafId) cancelAnimationFrame(rafId)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // track the pasteboard viewport size; the canvas fills it exactly
@@ -1210,7 +1537,11 @@ export default function Home() {
       // rects (fast) when beads are small on screen — you can't see the oval shape
       // below ~6 px anyway — or when so much lattice is visible that filling all
       // the ovals would stall a frame. Detailed ovals return when zoomed in close.
-      const heavy = onScreenBw < 6 || visibleCells > 3000
+      // NOTE: this cell threshold MUST match the per-layer rect cutoff below
+      // (vis > 2000). If it's higher, there's a dead zone — zoomed in enough that
+      // the texture is off (≤ this many cells) but too many beads for ovals
+      // (> 2000) — where beads render as flat rects with NO jali. Keep them equal.
+      const heavy = onScreenBw < 6 || visibleCells > 2000
       const drawOutlines = onScreenBw > 6 && !heavy
       const simple = heavy
       ctx.lineWidth = 1.25 / scale
@@ -1239,6 +1570,7 @@ export default function Home() {
       // clean shapes, and we track the filled beads' bounding box so the overlay
       // paints only where beads are (not over empty/transparent canvas).
       const texActive = simple && onScreenBw >= TEX_MIN_PX && !imageShowing
+      lastTexActiveRef.current = texActive // so stroke-commit knows if it can skip the repaint
       let bxMin = Infinity, bxMax = -Infinity, byMin = Infinity, byMax = -Infinity
       const growBounds = (col, row) => {
         if (col < bxMin) bxMin = col
@@ -1254,6 +1586,9 @@ export default function Home() {
 
       for (const lay of visLayers) {
         if (lay.type === 'bg') continue // already painted as the base
+        // erase-floor render: skip the active bead layer so its cells read as
+        // empty — the image we reveal through erased cells (see drawStrokeErase).
+        if (hideActiveForFloorRef.current && lay.type === 'bead' && lay.id === aId) continue
         if (lay.type === 'image') {
           if (!lay.img) continue
           ctx.save()
@@ -1356,7 +1691,13 @@ export default function Home() {
       // (skipped when beads are tiny on screen). Over a reference image they stay
       // outline-only so the design shows through. Batched into ONE path so the
       // whole grid is a single fill + single stroke.
-      if (!simple && drawOutlines) {
+      // Draw the empty-bead grid whenever the beads are big enough to read a shape
+      // (> 6 px) and there aren't too many on screen to batch cheaply. This is ONE
+      // Path2D (single fill + single stroke) built only on settle (gestures blit a
+      // cached frame), so it stays fast even for the default ~2k-cell canvas that
+      // used to fall past the old > 2000 gate and render as blank white.
+      const showEmptyGrid = onScreenBw > 6 && visibleCells < 6000
+      if (showEmptyGrid) {
         const emptyPath = new Path2D()
         for (let row = r0; row < r1; row++) {
           for (let col = c0; col < c1; col++) {
@@ -1366,9 +1707,10 @@ export default function Home() {
             tech.beadOutline(emptyPath, cx, cy, Bw, Bh, tiltFor(col, row))
           }
         }
-        if (!imageShowing) { ctx.fillStyle = '#eaeaeb'; ctx.fill(emptyPath) }
+        // slight grey bead grid on the canvas (outline carries it; subtle fill)
+        if (!imageShowing) { ctx.fillStyle = '#e6e4dd'; ctx.fill(emptyPath) }
         ctx.lineWidth = 1.25 / scale
-        ctx.strokeStyle = '#cdcac3'
+        ctx.strokeStyle = '#b6b1a6'
         ctx.stroke(emptyPath)
       }
 
@@ -1419,6 +1761,20 @@ export default function Home() {
         ctx.globalAlpha = 1
       }
 
+      // mirror preview: a faint flipped copy on each of the 4 sides
+      if (mirrorGhosts) {
+        ctx.globalAlpha = 0.45
+        for (const v of mirrorGhosts) {
+          for (const { col, row, fill } of v.cells) {
+            const { cx, cy } = geo.centerFor(col, row)
+            tech.beadPath(ctx, cx, cy, dw, dh, tiltFor(col, row))
+            ctx.fillStyle = fill
+            ctx.fill()
+          }
+        }
+        ctx.globalAlpha = 1
+      }
+
       // cm ruler along the top + left edges, so a design can be measured in real
       // centimetres. Drawn in document space (moves + rotates with the canvas) but
       // sized in screen px (÷scale) so ticks/numbers stay a constant readable size.
@@ -1454,7 +1810,7 @@ export default function Home() {
         ctx.restore()
       }
     },
-    [viewport, view, geo, beads, layers, activeId, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing, tech, canvasCm, beadTexture]
+    [viewport, view, geo, beads, layers, activeId, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing, mirrorGhosts, tech, canvasCm, beadTexture]
   )
 
   // Fast stroke repaint: blit the scene snapshot taken at stroke start, then draw
@@ -1493,6 +1849,49 @@ export default function Home() {
       ctx.fill(path)
     },
     [viewport, view, DPR, pack, Bw, Bh, geo, tech, tiltFor, color]
+  )
+
+  // Fast ERASE repaint: blit the pre-stroke snapshot, then reveal the "floor"
+  // (the scene with the active layer hidden — captured at stroke start) through
+  // ONLY the erased cells. O(erased cells) per frame, so erasing on a dense design
+  // no longer repaints every bead every frame (the sustained freeze that killed
+  // iPad Safari). Mirror of drawStrokeFast for the additive case.
+  const drawStrokeErase = useCallback(
+    (ctx) => {
+      const cache = strokeCacheRef.current
+      const floor = eraseFloorRef.current
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+      if (cache) ctx.drawImage(cache, 0, 0)
+      const erased = strokeErasedRef.current
+      if (!floor || !erased || !erased.size) return
+      const { scale, tx, ty, rot } = view
+      const vcos = Math.cos(rot)
+      const vsin = Math.sin(rot)
+      ctx.setTransform(
+        DPR * scale * vcos, DPR * scale * vsin,
+        -DPR * scale * vsin, DPR * scale * vcos,
+        tx * DPR, ty * DPR
+      )
+      // clip to the erased cells (same footprint drawScene fills per cell), then
+      // blit the floor bitmap through it. The clip is stored in device space, so
+      // we reset to identity for the 1:1 drawImage.
+      const clip = new Path2D()
+      for (const k of erased) {
+        const ci = k.indexOf(',')
+        const c = +k.slice(0, ci)
+        const r = +k.slice(ci + 1)
+        const { cx, cy } = geo.centerFor(c, r)
+        const even = r % 2 === 0
+        clip.rect(cx - (even ? geo.Px : geo.Px / 2), cy - geo.Py / 2, even ? geo.Px * 2 : geo.Px, geo.Py)
+      }
+      ctx.save()
+      ctx.clip(clip)
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.drawImage(floor, 0, 0)
+      ctx.restore()
+    },
+    [view, DPR, geo]
   )
   // ---- fast zoom/pan: blit the last full render, transformed, during a gesture -
   // A full drawScene on a big canvas re-iterates every placed bead (~100ms on a
@@ -1542,10 +1941,15 @@ export default function Home() {
   beginInteractRef.current = beginInteract
 
   // rAF repaint: fast stroke path mid-draw, blit mid-gesture, else full + cache
+  // skip a redundant commit repaint: the canvas already shows the final stroke,
+  // so just refresh the zoom cache from it (no O(all-beads) render → no freeze).
+  const skipCommitRender = (ctx) => { captureCache(ctx.canvas); skipCommitRenderRef.current = false }
   drawRef.current = (ctx) =>
-    fastStrokeRef.current ? drawStrokeFast(ctx)
-      : interactingRef.current ? drawBlit(ctx)
-        : drawSceneFull(ctx)
+    skipCommitRenderRef.current ? skipCommitRender(ctx)
+      : fastStrokeRef.current ? drawStrokeFast(ctx)
+        : fastEraseRef.current ? drawStrokeErase(ctx)
+          : interactingRef.current ? drawBlit(ctx)
+            : drawSceneFull(ctx)
 
   // Overlay repaint: just the brush hover ghost, in the SAME document transform
   // as the scene so it lands on the exact cells the brush would paint. Cheap, so
@@ -1791,7 +2195,9 @@ export default function Home() {
 
   const handleStrokePoint = (p) => {
     const s = strokeRef.current
-    if (s && !s.locked) {
+    // straight-line snap is a DRAW assist; skip it for erase (it copies the whole
+    // bead Map per sample — churn — and bypasses the fast-erase path).
+    if (s && !s.locked && tool !== 'erase') {
       // thin the recorded path: pencils fire up to 240 events/s
       const last = s.pts[s.pts.length - 1]
       if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 1) s.pts.push(p)
@@ -1833,6 +2239,9 @@ export default function Home() {
     const ae = document.activeElement
     if (ae && ae !== document.body && typeof ae.blur === 'function') ae.blur()
     canvasRef.current.setPointerCapture?.(e.pointerId)
+    // mirror preview open: the on-canvas tap buttons handle the choice; ignore
+    // canvas draws/pans so nothing gets painted underneath it.
+    if (mirrorGhosts) return
     // clear the hover ghost so it can't linger frozen on the overlay mid-drag
     if (hoverRef.current.length) setHoverCells([])
     if (e.pointerType === 'touch') {
@@ -1865,12 +2274,14 @@ export default function Home() {
       return
     }
     if (!canEditRef.current) { showToast(blockedRef.current()); return } // hidden/locked/non-bead layer
+    recordCrumbRef.current?.(`draw-start(${tool})`) // crash-hunt breadcrumb
     dragging.current = true
     strokeBase.current = beadsRef.current // history: snapshot at stroke start
     strokeRef.current = { start: p, pts: [], locked: false, snapped: false, lastN: -1 }
     // arm the fast-stroke path for a freehand DRAW on the top-most visible layer
     // (so stamping new beads over the snapshot can't paint over an upper layer).
     fastStrokeRef.current = false
+    fastEraseRef.current = false
     if (tool === 'draw') {
       pushRecent(color)
       const li = layersRef.current
@@ -1886,6 +2297,21 @@ export default function Home() {
         strokePaintedRef.current = new Set()
         fastStrokeRef.current = true
       }
+    } else if (tool === 'erase' && canvasRef.current) {
+      // arm the fast ERASE path: snapshot the current scene AND render the floor
+      // (active layer hidden) once, so each move reveals only the erased cells.
+      const src = canvasRef.current
+      let cache = strokeCacheRef.current
+      if (!cache) { cache = document.createElement('canvas'); strokeCacheRef.current = cache }
+      cache.width = src.width; cache.height = src.height
+      cache.getContext('2d').drawImage(src, 0, 0)
+      let floor = eraseFloorRef.current
+      if (!floor) { floor = document.createElement('canvas'); eraseFloorRef.current = floor }
+      floor.width = src.width; floor.height = src.height
+      hideActiveForFloorRef.current = true
+      try { drawScene(floor.getContext('2d')) } finally { hideActiveForFloorRef.current = false }
+      strokeErasedRef.current = new Set()
+      fastEraseRef.current = true
     }
     paintBrush(p.x, p.y, tool)
   }
@@ -2000,9 +2426,17 @@ export default function Home() {
     // Silent strokes never updated layersRef, so its active entry still holds
     // the PRE-stroke Map — currentDoc() is the correct snapshot to undo to.
     if (strokeBase.current && strokeBase.current !== beadsRef.current) {
+      // If a fast stroke drew the final pixels already, skip the redundant full
+      // repaint that setBeads triggers (the per-stroke freeze that crashed iPad).
+      // Erase's fast path is pixel-exact (reveals a real render); draw's fast path
+      // matches too UNLESS the texture overlay is on (then its beads lack texture).
+      if (fastEraseRef.current || (fastStrokeRef.current && !lastTexActiveRef.current)) {
+        skipCommitRenderRef.current = true
+      }
       pushHistory(currentDoc())
       setBeads(beadsRef.current) // strokes were silent — sync React state once
       syncActiveLayer() // and fold the new beads into the layer stack
+      recordCrumbRef.current?.('draw-commit') // crash-hunt: mark the heavy commit
     }
     strokeBase.current = null
     strokeRef.current = null
@@ -2013,6 +2447,8 @@ export default function Home() {
     // full drawScene that reconciles the snapshot with the real scene
     fastStrokeRef.current = false
     strokePaintedRef.current = null
+    fastEraseRef.current = false
+    strokeErasedRef.current = null
   }
 
   // When a two-finger gesture ends, gently snap the rotation to the nearest
@@ -2189,8 +2625,9 @@ export default function Home() {
     return out
   }
 
-  const exportPNG = async () => {
+  const exportChart = async (fmt = 'png') => {
     if (exporting) return
+    recordCrumbRef.current?.('export-start') // crash-hunt breadcrumb
     setExporting(true)
     // let the button's "Preparing…" state actually paint before we hog the main
     // thread building the chart (a big chart is a heavy synchronous render).
@@ -2229,35 +2666,40 @@ export default function Home() {
     const s = rasterScale(outW, outH)
     out.width = Math.ceil(outW * s)
     out.height = Math.ceil(outH * s)
+    recordCrumbRef.current?.(`export ${out.width}×${out.height}`) // crash-hunt: size of the giant off-counter export canvas
     const ctx = out.getContext('2d')
     ctx.scale(s, s)
-    if (exportBg !== 'transparent') {
-      ctx.fillStyle = '#FFFFFF'
-      ctx.fillRect(0, 0, outW, outH)
-    }
+    // The printable chart always gets a white sheet so the bead outlines and the
+    // row/column counting scale read clearly (a transparent PNG hid the dark numbers).
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, outW, outH)
     ctx.drawImage(chart, 0, 0)
     ctx.drawImage(legend, 0, chart.height + gap)
     // toBlob (async) instead of toDataURL: it doesn't build a giant base64
     // string on the main thread and downloads via an object URL, so a big export
     // stays lighter on memory. Same pixels ⇒ same PNG, so identical-size exports
     // (the animation use case) still match.
+    const mime = fmt === 'jpeg' ? 'image/jpeg' : 'image/png'
+    const ext = fmt === 'jpeg' ? 'jpg' : 'png'
     await new Promise((resolve) => {
       out.toBlob((blob) => {
         if (blob) {
           const url = URL.createObjectURL(blob)
           const link = document.createElement('a')
-          link.download = 'beadwork-chart.png'
+          link.download = `beadwork-chart.${ext}`
           link.href = url
           link.click()
           URL.revokeObjectURL(url)
         }
         resolve()
-      }, 'image/png')
+      }, mime, fmt === 'jpeg' ? 0.92 : undefined)
     })
     } finally {
       setExporting(false)
     }
   }
+  const exportPNG = () => exportChart('png')
+  const exportJPG = () => exportChart('jpeg')
 
   // no confirm dialog: undo-able, and a locked/hidden layer just toasts why.
   // Clears the ACTIVE layer only (other layers are untouched, Procreate-style).
@@ -2524,6 +2966,24 @@ export default function Home() {
     URL.revokeObjectURL(link.href)
   }
 
+  // Export a chosen set of artworks to one file (re-importable via Import file).
+  const exportSelected = async (ids) => {
+    const all = await listArtworks()
+    const chosen = all.filter((a) => ids.has(a.id))
+    if (!chosen.length) return
+    const blob = new Blob(
+      [JSON.stringify({ version: 2, kind: 'beadwork-backup', artworks: chosen })],
+      { type: 'application/json' }
+    )
+    const link = document.createElement('a')
+    link.download = `beadwork-export-${new Date().toISOString().slice(0, 10)}.json`
+    link.href = URL.createObjectURL(blob)
+    link.click()
+    URL.revokeObjectURL(link.href)
+  }
+  const togglePick = (id) =>
+    setExportPick((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+
   const isDesign = (d) => d && typeof d === 'object' && (Array.isArray(d.layers) || Array.isArray(d.beads))
 
   // Import a file: a single design becomes a new artwork (and opens); a backup
@@ -2566,8 +3026,12 @@ export default function Home() {
     // Serialising a dense design (every layer's beads → arrays) is heavy; on a
     // big design back the debounce off so rapid edits don't churn memory and
     // hammer IndexedDB on each stroke (iPad Safari memory pressure).
+    // Serialising a big design ([...beads.entries()] → IndexedDB) allocates several
+    // MB each save. During active colouring that repeated churn is the biggest
+    // avoidable memory pressure on iPad, so on big designs we hold off until the
+    // user actually pauses (longer idle) instead of saving on every quick break.
     const total = layersRef.current.reduce((n, l) => n + (l.beads ? l.beads.size : 0), 0)
-    const delay = total > 40000 ? 1500 : 600
+    const delay = total > 40000 ? 4000 : total > 15000 ? 1800 : 600
     saveTimer.current = setTimeout(() => {
       const rec = { id: currentArtworkId, updatedAt: Date.now(), ...designData() }
       putArtwork(rec)
@@ -2577,6 +3041,16 @@ export default function Home() {
     return () => clearTimeout(saveTimer.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, currentArtworkId, layers, canvasCm, beadMM, palette, pack, designName, techniqueId])
+
+  // Manual save — the design already auto-saves, but an explicit "Saved"
+  // confirmation reassures the user their work is safe.
+  const saveNow = () => {
+    if (!currentArtworkId) { showToast('Saved'); return }
+    const rec = { id: currentArtworkId, updatedAt: Date.now(), ...designData() }
+    putArtwork(rec)
+      .then(() => { setArtworks((a) => a.map((x) => (x.id === rec.id ? summarize(rec) : x))); showToast('Saved') })
+      .catch(() => showToast('Save failed — try again'))
+  }
 
   // ---- one-time migration of the old localStorage designs into IndexedDB ----
   const migrateFromLocalStorage = async () => {
@@ -2629,141 +3103,6 @@ export default function Home() {
 
   return (
     <div className="app">
-      {/* LEFT panel — tools & document. Scrolls; hold-to-clear pinned at the bottom. */}
-      <aside className="panel left">
-        <div className="panelScroll">
-        <div className="brand">BEADWORK<span className="dot" /></div>
-        <div className="sub">{tech.subtitle}</div>
-
-        {!canEdit && (
-          <div className="lockNote">
-            {activeLayer && !activeLayer.visible ? 'Active layer is hidden' : 'Active layer is locked'}
-            {' '}— drawing is off.
-          </div>
-        )}
-
-        {tool !== 'select' && (
-          <div className="brushRow">
-            <span className="brushLabel">Brush</span>
-            <input
-              className="slider"
-              type="range"
-              min="1"
-              max="6"
-              step="1"
-              value={brush}
-              onChange={(e) => setBrush(+e.target.value)}
-            />
-            <span className="brushVal">{brush}</span>
-          </div>
-        )}
-
-        {(tool === 'select' || selection.size > 0 || placing) && (
-          <div className="card selCard">
-            <div className="cardTitle">Selection · {selection.size}</div>
-            <div className="pillRow">
-              <button className="ghost" onClick={recolorSelection} disabled={!selection.size || !canEdit}>Recolour</button>
-              <button className="ghost" onClick={deleteSelection} disabled={!selection.size || !canEdit}>Delete</button>
-            </div>
-            {!placing && (
-              <>
-                <div className="pillRow">
-                  <button className="ghost half" onClick={() => startPlacing('copy')} disabled={!selection.size || !canEdit}>Duplicate</button>
-                  <button className="ghost half" onClick={() => startPlacing('move')} disabled={!selection.size || !canEdit}>Move</button>
-                </div>
-                <div className="pillRow">
-                  <button className="ghost half" onClick={() => mirrorSelection('h')} disabled={!selection.size || !canEdit} title="Add a left–right flipped copy beside the selection">Mirror ↔</button>
-                  <button className="ghost half" onClick={() => mirrorSelection('v')} disabled={!selection.size || !canEdit} title="Add an up–down flipped copy below the selection">Mirror ↕</button>
-                </div>
-              </>
-            )}
-            {placing && (
-              <>
-                <div className="cardTitle small">{placing.mode === 'move' ? 'Moving selection' : 'Placing copy'}</div>
-                <div className="pillRow">
-                  <button className="ghost half" onClick={placeMotif} disabled={!canEdit}>Place</button>
-                  <button className="ghost half" onClick={() => setPlacing(null)}>Cancel</button>
-                </div>
-                <div className="hint tip">
-                  {placing.mode === 'move'
-                    ? 'Drag the faded beads to their new spot, then tap Place. Cancel puts them back.'
-                    : 'Drag the faded copy on the canvas, then tap Place. The placed copy stays selected — Duplicate again to keep stamping.'}
-                </div>
-              </>
-            )}
-            {selection.size > 0 && <button className="ghost" onClick={clearSelection}>Clear selection</button>}
-            <div className="cardTitle small">Pattern maker</div>
-            <div className="pillRow">
-              <button className="ghost" onClick={() => makePattern('grid')} disabled={!selection.size || !canEdit}>Grid</button>
-              <button className="ghost" onClick={() => makePattern('brick')} disabled={!selection.size || !canEdit}>Brick</button>
-              <button className="ghost" onClick={() => makePattern('halfdrop')} disabled={!selection.size || !canEdit}>½ drop</button>
-            </div>
-            <Pill
-              value={patternGap}
-              label="gap beads"
-              onChange={(v) => setPatternGap(clampNum(Math.round(v), 0, 60))}
-            />
-            <div className="hint tip">
-              Drag a box over coloured beads to select a motif, then repeat it
-              across the whole canvas. Gap = empty beads between repeats.
-              Undo removes the pattern.
-            </div>
-          </div>
-        )}
-
-        <div className="hint tip">Drag a palette colour onto the canvas to fill a region.</div>
-
-        <div className="card">
-          <div className="cardTitle">Canvas size</div>
-          <div className="pillRow">
-            <Pill value={canvasCm.w} label="cm W" onChange={(v) => setCanvasCm((c) => ({ ...c, w: clampNum(v, 1, 300) }))} />
-            <Pill value={canvasCm.h} label="cm H" onChange={(v) => setCanvasCm((c) => ({ ...c, h: clampNum(v, 1, 300) }))} />
-          </div>
-          <div className="hint">≈ {cols} × {rows} beads · pinch / scroll to zoom · finger / space-drag to pan · 2-finger tap undo · 3-finger tap redo</div>
-        </div>
-
-        <div className="card">
-          <div className="cardTitle">Bead size</div>
-          <div className="segmented">
-            {BEAD_SIZES.map((s) => (
-              <button
-                key={s.label}
-                className={`seg ${beadMM.w === s.w ? 'on' : ''}`}
-                onClick={() => setBeadMM({ w: s.w, h: s.h })}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-          <div className="hint">4:5 ratio · {cols} × {rows} beads</div>
-          <div className="cardTitle small">Bead spacing</div>
-          <div className="brushRow">
-            <span className="brushLabel">Spaced</span>
-            <input
-              className="slider"
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={pack}
-              onChange={(e) => setPack(+e.target.value)}
-            />
-            <span className="brushLabel">Packed</span>
-          </div>
-          <div className="hint">Packed draws beads touching, like the real weave.</div>
-        </div>
-
-        <div className="card">
-          <div className="cardTitle">Background &amp; images</div>
-          <div className="hint">The background colour and reference images are now layers. Open the <strong>Layers</strong> panel (right of the canvas) to set the background colour, add a photo to trace, or hide the background for transparency.</div>
-        </div>
-        </div>
-
-        <div className="saveCluster">
-          <HoldButton onHold={clearCanvas}>Hold to clear canvas</HoldButton>
-        </div>
-      </aside>
-
       <main className="stage">
         <div className="pasteboard" ref={wrapRef}>
           <canvas
@@ -2778,9 +3117,20 @@ export default function Home() {
           {/* hover ghost lives here so it repaints without redrawing the scene.
               Mouse-only: never allocated on touch screens (iPad memory). */}
           {canHover && <canvas ref={overlayRef} className="overlay" />}
-          {/* floating tool strip — right edge, under a right-handed iPad user's
-              hand (locked iPad-pass decision #4). Big ≥44px touch targets. */}
-          <div className="toolStrip">
+          {/* ── two floating toolbar pills (Figma canvas screen) ── */}
+          <div className="tbPill tbLeft">
+            <button className="tbIcon" onClick={() => setScreen('gallery')} title="My artworks">
+              <IconHome />
+            </button>
+            <button
+              className={`tbIcon ${showMenu ? 'on' : ''}`}
+              onClick={() => { setShowMenu((v) => !v); setShowLayers(false); setShowColor(false) }}
+              title="Menu"
+            >
+              <IconMenu />
+            </button>
+          </div>
+          <div className="tbPill tbRight">
             {[
               ['draw', 'Draw', <IconDraw key="d" />],
               ['erase', 'Erase', <IconErase key="e" />],
@@ -2788,101 +3138,221 @@ export default function Home() {
             ].map(([id, label, icon]) => (
               <button
                 key={id}
-                className={`stripBtn ${tool === id ? 'on' : ''}`}
-                onClick={() => setTool(id)}
+                className={`tbIcon ${tool === id ? 'on' : ''}`}
+                onClick={() => { setTool(id); setShowLayers(false); setShowColor(false); setShowMenu(false) }}
                 title={label}
               >
                 {icon}
-                <span>{label}</span>
               </button>
             ))}
-            <span className="stripSep" />
             <button
-              className={`stripBtn ${showLayers ? 'on' : ''}`}
-              onClick={() => setShowLayers((v) => !v)}
+              className={`tbIcon ${showLayers ? 'on' : ''}`}
+              onClick={() => { setShowLayers((v) => !v); setShowColor(false); setShowMenu(false) }}
               title="Layers"
             >
               <IconLayers />
-              <span>Layers</span>
             </button>
+            <button
+              type="button"
+              className={`tbColor ${showColor ? 'on' : ''}`}
+              style={{ background: color }}
+              onPointerDown={onBigSwatchDown}
+              onClick={() => { if (!bigSwatchDidDrag.current) { setShowColor((v) => !v); setShowLayers(false); setShowMenu(false) } }}
+              title="Colour"
+            />
           </div>
 
-          {/* floating Procreate-style layers panel (sits left of the tool strip) */}
+          {/* artwork name above the canvas — double-tap to rename (Figma "Parvat") */}
+          {editName ? (
+            <input
+              className="canvasName editing"
+              value={designName}
+              placeholder="Untitled"
+              autoFocus
+              onChange={(e) => setDesignName(e.target.value)}
+              onBlur={() => setEditName(false)}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+            />
+          ) : (
+            <span className="canvasName" onDoubleClick={() => setEditName(true)} title="Double-tap to rename">
+              {designName || 'Untitled'}
+            </span>
+          )}
+
+          {/* left brush-size rail (Procreate). Hidden for the select tool. */}
+          {tool !== 'select' && (
+            <div className="brushRail">
+              <input
+                className="vSlider"
+                type="range" min="1" max="6" step="1"
+                value={brush}
+                onChange={(e) => setBrush(+e.target.value)}
+                title={`Brush size — ${brush}`}
+              />
+              <span className="brushRailVal">{brush}</span>
+            </div>
+          )}
+
+          {/* right colour rail = the active palette. Drag a swatch onto the canvas to fill. */}
+          <div className="paletteRail">
+            {activePalette.colors.map((c, i) => (
+              <button
+                key={i}
+                className={`railSw ${c === color ? 'on' : ''}`}
+                style={{ background: c }}
+                onPointerDown={onSwatchDown(c)}
+                onPointerMove={onSwatchMove}
+                onPointerUp={onSwatchUp}
+                onPointerCancel={onSwatchCancel}
+                title={c}
+              />
+            ))}
+          </div>
+
+          {/* undo / redo — bottom-left */}
+          <div className="undoRedo">
+            <button onClick={undo} title="Undo — 2-finger tap or Ctrl+Z"><IconUndo /></button>
+            <button onClick={redo} title="Redo — 3-finger tap or Ctrl+Shift+Z"><IconRedo /></button>
+          </div>
+
+          {/* drawing-off banner when the active layer is locked or hidden */}
+          {!canEdit && (
+            <div className="lockNote">
+              {activeLayer && !activeLayer.visible ? 'Active layer is hidden' : 'Active layer is locked'}
+              {' '}— drawing is off.
+            </div>
+          )}
+
+          {/* selection tools — compact bottom bar (Figma 52:792) */}
+          {(tool === 'select' || selection.size > 0) && !placing && !mirrorGhosts && (
+            <div className="selPanel">
+              <div className="selRow">
+                <button className="selChip" onClick={() => startPlacing('move')} disabled={!selection.size || !canEdit}>Move</button>
+                <button className="selChip" onClick={() => startPlacing('copy')} disabled={!selection.size || !canEdit}>Duplicate</button>
+                <button className="selChip" onClick={openMirror} disabled={!selection.size || !canEdit}>Mirror</button>
+                <button className="selChip" onClick={deleteSelection} disabled={!selection.size || !canEdit}>Clear</button>
+              </div>
+              <div className="selRow">
+                <span className="selPatternLbl">Pattern</span>
+                <button className="selChip" onClick={() => makePattern('grid')} disabled={!selection.size || !canEdit}>Grid</button>
+                <button className="selChip" onClick={() => makePattern('brick')} disabled={!selection.size || !canEdit}>Brick</button>
+                <button className="selChip" onClick={() => makePattern('halfdrop')} disabled={!selection.size || !canEdit}>Half drop</button>
+              </div>
+            </div>
+          )}
+
+          {/* mirror preview — a ✓ centred on each of the 4 mirrored ghosts */}
+          {mirrorGhosts && (
+            <>
+              {mirrorGhosts.map((v, i) => {
+                const s = docToScreen(v.cx, v.cy, view)
+                return (
+                  <button
+                    key={i}
+                    className="mirrorPick"
+                    style={{ left: `${s.x}px`, top: `${s.y}px` }}
+                    onClick={() => applyMirror(v)}
+                    title="Place this mirror"
+                  ><IconCheck /></button>
+                )
+              })}
+              <button className="floatCancel" onClick={() => setMirrorGhosts(null)}>Cancel</button>
+            </>
+          )}
+
+          {/* placement confirm — ✓ above the dragged design, ✗ to cancel */}
+          {placing && (() => {
+            let minDc = Infinity, maxDc = -Infinity, minDr = Infinity
+            for (const { dc, dr } of placing.motif) {
+              if (dc < minDc) minDc = dc; if (dc > maxDc) maxDc = dc; if (dr < minDr) minDr = dr
+            }
+            const d = geo.centerFor(placing.c + (minDc + maxDc) / 2, placing.r + minDr)
+            const s = docToScreen(d.cx, d.cy, view)
+            return (
+              <div className="placeConfirm" style={{ left: `${s.x}px`, top: `${s.y}px` }}>
+                <button className="placeBtn ok" onClick={placeMotif} title="Place"><IconCheck /></button>
+                <button className="placeBtn no" onClick={() => setPlacing(null)} title="Cancel">×</button>
+              </div>
+            )
+          })()}
+
+          {/* layers panel (Figma 52:685) */}
           {showLayers && (
             <div className="layersPanel">
-              <div className="layersHead">
-                <span>LAYERS</span>
+              <div className="lpHead">
+                <span className="lpTitle">Layers</span>
                 <div className="lpHeadBtns">
-                  <label className="lpAdd lpImg" title="Add reference image">
+                  <button className="lpAddBtn lpImgBtn" onClick={() => imgInputRef.current?.click()} title="Add image to trace">
                     <IconImage />
-                    <input type="file" accept="image/png,image/jpeg" style={{ display: 'none' }} onChange={(e) => { addImageLayer(e.target.files[0]); e.target.value = '' }} />
-                  </label>
-                  <button className="lpAdd" onClick={addLayer} title="New bead layer">+</button>
+                  </button>
+                  <button className="lpAddBtn" onClick={addLayer} title="New layer">+</button>
                 </div>
+                <input
+                  ref={imgInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg"
+                  style={{ display: 'none' }}
+                  onChange={(e) => { addImageLayer(e.target.files[0]); e.target.value = '' }}
+                />
               </div>
-              <div className="layersList">
-                {/* top of the stack shows first (array is bottom→top) */}
-                {[...layers].reverse().map((l) => (
+              <div className="lpList">
+                {/* top of the stack shows first (array is bottom→top). Tap = select,
+                    hold-drag = reorder, long-press = add an image onto the layer. */}
+                {[...layers].reverse().map((l) => {
+                  const dragging = layerDrag?.id === l.id
+                  return (
                     <div
                       key={l.id}
-                      className={`layerRow ${l.id === activeId ? 'on' : ''} ${l.id === adjustId ? 'adjusting' : ''}`}
-                      onClick={() => switchLayer(l.id)}
+                      className={`lpRow ${l.id === activeId ? 'active' : ''} ${dragging ? 'dragging' : ''}`}
+                      style={dragging ? { transform: `translateY(${layerDrag.dy}px)` } : undefined}
+                      onPointerDown={(e) => onLayerRowDown(e, l)}
                     >
-                      <button
-                        className="lpEye"
-                        onClick={(e) => { e.stopPropagation(); toggleVisible(l.id) }}
-                        title={l.visible ? (l.type === 'bg' ? 'Hide background (transparent)' : 'Hide layer') : 'Show layer'}
-                      >
-                        {l.visible ? <IconEye /> : <IconEyeOff />}
-                      </button>
-                      {l.type === 'bg' && (
+                      {l.type === 'bg' ? (
                         <input
                           type="color"
-                          className="lpSwatch"
+                          className="lpThumb lpThumbColor"
                           value={l.color}
+                          onPointerDown={(e) => e.stopPropagation()}
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => setBgColor(e.target.value)}
                           title="Background colour"
                         />
+                      ) : l.type === 'image' && l.src ? (
+                        <span className="lpThumb"><img src={l.src} alt="" /></span>
+                      ) : (
+                        <span className="lpThumb" />
                       )}
-                      <span
-                        className="lpName"
-                        onDoubleClick={() => {
-                          if (l.type === 'bg') return
-                          const name = window.prompt('Rename layer:', l.name)
-                          if (name !== null) renameLayer(l.id, name.trim() || l.name)
-                        }}
-                        title={l.type === 'bg' ? 'Background colour' : 'Double-click to rename'}
-                      >
-                        {l.name}
-                        {l.locked && <em className="lpLockTag">locked</em>}
-                        {l.alphaLock && <em className="lpLockTag">α</em>}
-                      </span>
-                      {l.type === 'image' ? (
+                      <span className="lpName">{l.name}</span>
+                      {l.type === 'image' && (
                         <button
-                          className={`lpAdjust ${l.id === adjustId ? 'on' : ''}`}
+                          className={`lpEditBtn ${l.id === adjustId ? 'on' : ''}`}
+                          onPointerDown={(e) => e.stopPropagation()}
                           onClick={(e) => { e.stopPropagation(); switchLayer(l.id); setAdjustId(l.id === adjustId ? null : l.id) }}
                           disabled={l.locked || !l.visible}
-                          title="Move / resize this image on the canvas"
-                        >{l.id === adjustId ? 'Done' : 'Adjust'}</button>
-                      ) : l.type === 'bead' ? (
-                        <span className="lpCount">{l.beads.size}</span>
-                      ) : null}
+                          title={l.id === adjustId ? 'Done adjusting' : 'Adjust image'}
+                        ><IconEdit /></button>
+                      )}
                       {l.type !== 'bg' && (
                         <button
-                          className="lpLock"
+                          className="lpRowIcon"
+                          onPointerDown={(e) => e.stopPropagation()}
                           onClick={(e) => { e.stopPropagation(); toggleLock(l.id) }}
-                          title={l.locked ? 'Unlock layer' : 'Lock layer'}
-                        >
-                          {l.locked ? <IconLock /> : <IconUnlock />}
-                        </button>
+                          title={l.locked ? 'Unlock' : 'Lock'}
+                        >{l.locked ? <IconLock /> : <IconUnlock />}</button>
                       )}
+                      <button
+                        className="lpRowIcon"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); toggleVisible(l.id) }}
+                        title={l.visible ? 'Hide' : 'Show'}
+                      >{l.visible ? <IconEye /> : <IconEyeOff />}</button>
                     </div>
-                ))}
+                  )
+                })}
               </div>
               {activeLayer?.type === 'image' && (
                 <div className="lpOpacity">
-                  <span className="brushLabel">Opacity</span>
+                  <span className="lpOpLabel">Opacity</span>
                   <input
                     className="slider"
                     type="range" min="0.1" max="1" step="0.05"
@@ -2891,197 +3361,186 @@ export default function Home() {
                   />
                 </div>
               )}
-              <div className="layerActions">
+              <div className="lpBar">
                 {(() => {
-                  const i = layers.findIndex((l) => l.id === activeId)
                   const t = activeLayer?.type
                   const isBead = t === 'bead' || t == null
                   return (
                     <>
-                      <button onClick={() => duplicateLayer(activeId)} disabled={t === 'bg'} title="Duplicate active layer">Dup</button>
-                      <button onClick={() => mergeDown(activeId)} disabled={!isBead || layers[i - 1]?.type !== 'bead'} title="Merge active layer down">Merge↓</button>
-                      <button
-                        className={activeLayer?.alphaLock ? 'on' : ''}
-                        onClick={() => toggleAlphaLock(activeId)}
-                        disabled={!isBead}
-                        title="Alpha lock — recolour existing beads only"
-                      >α</button>
-                      <button onClick={() => moveLayer(activeId, 1)} disabled={t === 'bg' || i >= layers.length - 1} title="Move up">↑</button>
-                      <button onClick={() => moveLayer(activeId, -1)} disabled={t === 'bg' || i <= 1} title="Move down">↓</button>
-                      <button onClick={clearCanvas} disabled={!isBead} title="Clear this layer's beads (keeps the layer)">Clear</button>
-                      <button onClick={() => deleteLayer(activeId)} disabled={t === 'bg'} title="Delete active layer">Del</button>
+                      <button onClick={() => duplicateLayer(activeId)} disabled={t === 'bg'}>Duplicate</button>
+                      <span className="lpBarDiv" />
+                      <button className={activeLayer?.alphaLock ? 'on' : ''} onClick={() => toggleAlphaLock(activeId)} disabled={!isBead}>Alpha lock</button>
+                      <span className="lpBarDiv" />
+                      <button onClick={clearCanvas} disabled={!isBead}>Clear</button>
+                      <span className="lpBarDiv" />
+                      <button onClick={() => deleteLayer(activeId)} disabled={t === 'bg'}>Delete</button>
                     </>
                   )
                 })()}
               </div>
-              <div className="lpHint">Background is the bottom layer — hide it for a transparent canvas. Add images to trace; top layer wins where beads overlap.</div>
             </div>
           )}
           {/* image-adjust mode banner */}
           {adjustLayer && (
             <div className="adjustBar">
-              <span>ADJUST IMAGE — DRAG TO MOVE · PINCH / SCROLL TO RESIZE · SNAPS TO EDGES</span>
+              <span>ADJUST IMAGE</span>
               <button onClick={() => setAdjustId(null)}>DONE</button>
             </div>
           )}
           {toast && <div className="toast" key={toast}>{toast}</div>}
           <div className="zoomCtl">
-            <button onClick={undo} title="Undo — 2-finger tap or Ctrl+Z">↶</button>
-            <button onClick={redo} title="Redo — 3-finger tap or Ctrl+Shift+Z">↷</button>
-            <span className="zsep" />
             <button onClick={() => zoomAt(1 / 1.2, viewport.w / 2, viewport.h / 2)} title="Zoom out">−</button>
             <button className="zval" onClick={fitView} title="Fit to screen">{Math.round(view.scale * 100)}%</button>
             <button onClick={() => zoomAt(1.2, viewport.w / 2, viewport.h / 2)} title="Zoom in">+</button>
           </div>
-        </div>
-        <div className="stageInfo">
-          {cols} × {rows} GRID · {canvasCm.w}×{canvasCm.h} CM · BEAD {beadMM.w}×{beadMM.h} MM · {Math.round(view.scale * 100)}%
-          {view.rot ? ` · ${(((Math.round(view.rot * 180 / Math.PI) % 360) + 360) % 360)}°` : ''}
-          {' · '}{layers.reduce((n, l) => n + (l.beads ? l.beads.size : 0), 0).toLocaleString()} PLACED
-          {typeof performance !== 'undefined' && performance.memory
-            ? ` · ${Math.round(performance.memory.usedJSHeapSize / 1048576)} MB`
-            : ''}
-          {' · v'}{BUILD_ID}
+
+          {/* ☰ dropdown — opens under the menu button (Figma "Details") */}
+          {showMenu && (
+            <>
+              <div className="menuScrim" onClick={() => setShowMenu(false)} />
+              <div className="menuPop">
+                <button className="menuItem" onClick={() => { setShowMenu(false); saveNow() }}>Save Artwork</button>
+                <div className="menuDiv" />
+                <button className="menuItem" onClick={() => { setShowMenu(false); exportPNG() }} disabled={exporting}>Export PNG</button>
+                <div className="menuDiv" />
+                <button className="menuItem" onClick={() => { setShowMenu(false); exportJPG() }} disabled={exporting}>Export JPG</button>
+                <div className="menuDiv" />
+                <button className="menuItem" onClick={() => { setShowMenu(false); setShowDetails(true) }}>Artwork Details</button>
+              </div>
+            </>
+          )}
+
+          {/* Artwork Details modal */}
+          {showDetails && (
+            <div className="modalScrim" onClick={() => setShowDetails(false)}>
+              <div className="detailsModal" onClick={(e) => e.stopPropagation()}>
+                <div className="detailsHead">
+                  <span className="detailsTitle">Artwork Details</span>
+                  <button className="drawerClose" onClick={() => setShowDetails(false)} title="Close">×</button>
+                </div>
+                <div className="detailsScroll">
+                  <div className="card">
+                    <div className="cardTitle">Name</div>
+                    <Pill value={designName} label="name" text onChange={setDesignName} />
+                  </div>
+                  <div className="card">
+                    <div className="cardTitle">Canvas size</div>
+                    <SizeFields canvasCm={canvasCm} setCanvasCm={setCanvasCm} unit={unit} setUnit={setUnit} />
+                    <div className="cardTitle small">{cols} × {rows} beads</div>
+                  </div>
+                  <div className="card">
+                    <div className="cardTitle">Bead size</div>
+                    <div className="segmented">
+                      {BEAD_SIZES.map((s) => (
+                        <button
+                          key={s.label}
+                          className={`seg ${beadMM.w === s.w ? 'on' : ''}`}
+                          onClick={() => setBeadMM({ w: s.w, h: s.h })}
+                        >
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="cardTitle small">Bead spacing</div>
+                    <div className="brushRow">
+                      <span className="brushLabel">Spaced</span>
+                      <input className="slider" type="range" min="0" max="1" step="0.05" value={pack} onChange={(e) => setPack(+e.target.value)} />
+                      <span className="brushLabel">Packed</span>
+                    </div>
+                  </div>
+                  <div className="drawerInfo">
+                    {cols} × {rows} grid · {canvasCm.w}×{canvasCm.h} cm · bead {beadMM.w}×{beadMM.h} mm
+                    {' · '}{layers.reduce((n, l) => n + (l.beads ? l.beads.size : 0), 0).toLocaleString()} placed · v{BUILD_ID}
+                    {recovered && (
+                      <span style={{ color: '#c98a2c', fontWeight: 700 }}>
+                        {` · last crash: ${recovered.action} · ${recovered.beads} beads`}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* colour picker panel — opens from the toolbar colour dot */}
+          {showColor && (
+            <>
+              <div className="menuScrim" onClick={() => setShowColor(false)} />
+              <div className="colorPanel">
+                <div className="cpHead">
+                  <span className="cpTitle">Colours</span>
+                  <button className="drawerClose" onClick={() => setShowColor(false)} title="Close">×</button>
+                </div>
+                <ColorPicker color={color} onChange={setColor} />
+                {recentColors.length > 0 && (
+                  <>
+                    <div className="cpLabel">History</div>
+                    <div className="cpBox">
+                      {recentColors.slice(0, 8).map((c, i) => (
+                        <button key={i} className={`cpSw ${c === color ? 'on' : ''}`} style={{ background: c }} onClick={() => setColor(c)} title={c} />
+                      ))}
+                    </div>
+                  </>
+                )}
+                <div className="cpPalHead">
+                  <span className="cpLabel">Colour palettte</span>
+                  <button className="cpNew" onClick={addPalette} title="New palette from the current colour">+ New</button>
+                </div>
+                <div className="cpPalList">
+                  {savedPalettes.map((p) => {
+                    const editing = editPaletteId === p.id
+                    return (
+                      <div
+                        className={`cpPal ${p.id === activePaletteId ? 'active' : ''}`}
+                        key={p.id}
+                        onClick={() => setActivePaletteId(p.id)}
+                      >
+                        <div className="cpPalTop">
+                          {editing ? (
+                            <input
+                              className="cpPalName editing"
+                              value={p.name}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => renamePalette(p.id, e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                              title="Tap to rename"
+                            />
+                          ) : (
+                            <span className="cpPalName">{p.name}</span>
+                          )}
+                          <button
+                            className={`cpPalEdit ${editing ? 'on' : ''}`}
+                            onClick={(e) => { e.stopPropagation(); setEditPaletteId(editing ? null : p.id) }}
+                          >{editing ? 'Done' : 'Edit'}</button>
+                          <button className="cpPalDel" onClick={(e) => { e.stopPropagation(); deletePalette(p.id) }} title="Delete palette">×</button>
+                        </div>
+                        <div className="cpPalRow">
+                          {p.colors.map((c, j) => (
+                            <button
+                              key={j}
+                              className={`cpSw ${editing ? 'rm' : c === color ? 'on' : ''}`}
+                              style={{ background: c }}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (editing) removeFromPalette(p.id, j)
+                                else { setColor(c); setActivePaletteId(p.id) }
+                              }}
+                              title={c}
+                            >{editing ? '×' : ''}</button>
+                          ))}
+                          {!editing && p.colors.length < 8 && (
+                            <button className="cpSw add" onClick={(e) => { e.stopPropagation(); addToPalette(p.id) }} title="Add the current colour">+</button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </main>
-
-      {/* RIGHT panel — colour & output. Content scrolls; the save cluster stays
-          pinned at the bottom so a big palette can't push it away (iPad pass #6). */}
-      <aside className="panel right">
-        <div className="panelScroll">
-
-        {/* Colour */}
-        <div className="card">
-          <div className="cardTitle">Colour</div>
-          <div className="colorTop">
-            <input
-              type="color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              className="bigSwatch"
-              onPointerDown={onBigSwatchDown}
-              onClick={onBigSwatchClick}
-              title="Tap to open the colour picker · drag onto the canvas to fill"
-            />
-            <Pill value={color} label="hex" text onChange={(v) => setColor(v)} />
-          </div>
-          {recentColors.length > 0 && (
-            <>
-              <div className="cardTitle small">Recent</div>
-              <div className="swatches">
-                {recentColors.map((c, i) => (
-                  <button
-                    key={i}
-                    className={`sw ${c === color ? 'on' : ''}`}
-                    style={{ background: c }}
-                    onPointerDown={onSwatchDown(c)}
-                    onPointerMove={onSwatchMove}
-                    onPointerUp={onSwatchUp}
-                    onPointerCancel={onSwatchCancel}
-                    title={c}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-          <div className="cardTitle small">Palette</div>
-          <div className="swatches">
-            {palette.map((c, i) => (
-              <button
-                key={i}
-                className={`sw ${c === color ? 'on' : ''}`}
-                style={{ background: c }}
-                onPointerDown={onSwatchDown(c)}
-                onPointerMove={onSwatchMove}
-                onPointerUp={onSwatchUp}
-                onPointerCancel={onSwatchCancel}
-                title={`${c} — tap to pick, drag onto canvas to fill`}
-              />
-            ))}
-            <button
-              className="sw add"
-              title="Add current colour"
-              onClick={() => setPalette((p) => (p.includes(color) ? p : [...p, color]))}
-            >+</button>
-          </div>
-          <button
-            className="ghost"
-            onClick={() => {
-              const name = window.prompt('Name this palette:')
-              if (name) persistPalettes([...savedPalettes, { name, colors: palette }])
-            }}
-          >Save current palette</button>
-          {savedPalettes.length > 0 && (
-            <>
-              <div className="cardTitle small">Saved palettes — click to load</div>
-              <div className="savedList">
-                {savedPalettes.map((p, i) => (
-                  <div className="savedItem" key={i}>
-                    <button
-                      className="savedApply"
-                      onClick={() => setPalette(p.colors)}
-                      title={`Load “${p.name}”`}
-                    >
-                      <span className="savedName">{p.name}</span>
-                      <span className="savedSw">
-                        {p.colors.slice(0, 12).map((c, j) => (
-                          <i key={j} style={{ background: c }} />
-                        ))}
-                      </span>
-                    </button>
-                    <button
-                      className="x"
-                      title="Delete palette"
-                      onClick={() => persistPalettes(savedPalettes.filter((_, k) => k !== i))}
-                    >×</button>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* This artwork — name + auto-save status + a file to move it elsewhere */}
-        <div className="card">
-          <div className="cardTitle">This artwork</div>
-          <Pill value={designName} label="name" text onChange={setDesignName} />
-          <button className="ghost" onClick={() => setScreen('gallery')}>← My artworks</button>
-          <button className="ghost" onClick={exportDesignFile}>Export this artwork</button>
-          <div className="hint tip">
-            Saves itself automatically. Open another, or manage all your artworks,
-            from My artworks. Export to back up or move to another device.
-          </div>
-        </div>
-
-        {/* Export — PNG chart for the artisan */}
-        <div className="card">
-          <div className="cardTitle">Export — chart PNG</div>
-          <div className="segmented">
-            {[
-              ['transparent', 'Transparent'],
-              ['screen', 'On-screen'],
-            ].map(([id, label]) => (
-              <button
-                key={id}
-                className={`seg ${exportBg === id ? 'on' : ''}`}
-                onClick={() => setExportBg(id)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="hint">One sheet · outlined beads · numbers + guides every 10 · colour key.</div>
-        </div>
-
-        </div>
-
-        <div className="saveCluster">
-          <button className="primary" onClick={exportPNG} disabled={exporting}>
-            {exporting ? 'Preparing PNG…' : 'Save PNG'}
-          </button>
-          <div className="hint tip">Your work auto-saves. “Save PNG” makes the printable chart for the artisan.</div>
-        </div>
-      </aside>
 
       {/* floating swatch that follows the pointer while dragging a colour */}
       {dragGhost && (
@@ -3104,9 +3563,7 @@ export default function Home() {
                 <button className="primary newBtn" onClick={() => setChooser(true)}>+ New artwork</button>
               </div>
               {artworks.length === 0 ? (
-                <div className="galleryEmpty">
-                  No artworks yet. Tap <b>+ New artwork</b> to plant your first one.
-                </div>
+                <div className="galleryEmpty">No artworks yet.</div>
               ) : (
                 <div className="galleryList">
                   {[...artworks]
@@ -3136,11 +3593,7 @@ export default function Home() {
                     onChange={(e) => { onDesignFile(e.target.files[0]); e.target.value = '' }}
                   />
                 </label>
-                <button className="ghost half" onClick={exportAllArtworks} disabled={!artworks.length}>Back up all</button>
-              </div>
-              <div className="hint tip galleryHint">
-                Artworks are saved in this browser. “Back up all” keeps a safety
-                copy you can re-import here or on another device.
+                <button className="ghost half" onClick={() => setExportPick(new Set())} disabled={!artworks.length}>Export file</button>
               </div>
             </div>
           )}
@@ -3149,45 +3602,101 @@ export default function Home() {
 
       {/* technique chooser — opens from "New artwork". The choice is fixed for
           the new artwork's life. */}
+      {/* Export file — pick as many artworks as you like, export them to one file */}
+      {exportPick && (
+        <div className="modalScrim" onClick={() => setExportPick(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modalTitle">EXPORT FILE</div>
+            <div className="pickList">
+              {[...artworks].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).map((a) => (
+                <label className={`pickRow ${exportPick.has(a.id) ? 'on' : ''}`} key={a.id}>
+                  <input type="checkbox" checked={exportPick.has(a.id)} onChange={() => togglePick(a.id)} />
+                  <span className="pickName">{a.name}</span>
+                  <span className="pickMeta">{a.technique} · {a.beads} beads</span>
+                </label>
+              ))}
+            </div>
+            <div className="pillRow">
+              <button
+                className="ghost half"
+                onClick={() => setExportPick(exportPick.size === artworks.length ? new Set() : new Set(artworks.map((a) => a.id)))}
+              >{exportPick.size === artworks.length ? 'Select none' : 'Select all'}</button>
+              <button
+                className="primary half"
+                disabled={!exportPick.size}
+                onClick={() => { exportSelected(exportPick); setExportPick(null) }}
+              >Export{exportPick.size ? ` (${exportPick.size})` : ''}</button>
+            </div>
+            <button className="ghost" onClick={() => setExportPick(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
       {chooser && (
         <div className="modalScrim">
           <div className="modal">
-            <div className="modalTitle">CHOOSE A TECHNIQUE</div>
-            <div className="modalSub">
-              Starts a fresh, blank artwork. The technique is fixed once chosen —
-              switching later means starting a new artwork.
-            </div>
-            <div className="techGrid">
-              {TECHNIQUES.map((t) => (
-                <button
-                  key={t.id}
-                  className="techCard"
-                  onClick={() => createArtwork(t.id)}
-                >
-                  <span className="techName">{t.label}</span>
-                  <span className="techDesc">
-                    {t.id === '3bead'
-                      ? 'Kutch 3-bead weave — staggered, tilted beads.'
-                      : 'Loom / square-stitch — straight aligned grid.'}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <button className="ghost" onClick={() => setChooser(null)}>Cancel</button>
+            {!chooser.techId ? (
+              <>
+                <div className="modalTitle">NEW ARTWORK</div>
+                <div className="techGrid">
+                  {TECHNIQUES.map((t) => (
+                    <button
+                      key={t.id}
+                      className="techCard"
+                      onClick={() => setChooser({ techId: t.id })}
+                    >
+                      <span className="techName">{t.label}</span>
+                      <span className="techDesc">
+                        {t.id === '3bead' ? 'Kutch 3-bead weave' : 'Loom / square-stitch'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <button className="ghost" onClick={() => setChooser(null)}>Cancel</button>
+              </>
+            ) : (
+              <>
+                <div className="modalTitle">CANVAS &amp; BEADS</div>
+                <div className="card">
+                  <div className="cardTitle">Canvas size</div>
+                  <SizeFields canvasCm={canvasCm} setCanvasCm={setCanvasCm} unit={unit} setUnit={setUnit} />
+                  <div className="cardTitle small">{cols} × {rows} beads</div>
+                </div>
+                <div className="card">
+                  <div className="cardTitle">Bead size</div>
+                  <div className="segmented">
+                    {BEAD_SIZES.map((s) => (
+                      <button
+                        key={s.label}
+                        className={`seg ${beadMM.w === s.w ? 'on' : ''}`}
+                        onClick={() => setBeadMM({ w: s.w, h: s.h })}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button className="primary" onClick={() => createArtwork(chooser.techId)}>Create artwork</button>
+                <button className="ghost" onClick={() => setChooser(true)}>Back</button>
+              </>
+            )}
           </div>
         </div>
       )}
 
       <style jsx global>{`
-        html, body, #root { height: 100%; margin: 0; }
+        /* Lock the whole app to the viewport — position:fixed on the root elements
+           stops iOS Safari from ever scrolling the page (address-bar drag, rubber
+           band). All scrolling happens inside panels, never on the page. */
+        html, body, #root {
+          margin: 0; width: 100%; height: 100%;
+          position: fixed; inset: 0; overflow: hidden;
+          overscroll-behavior: none;
+        }
         body {
           background: ${T.bg};
           color: ${T.ink};
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Avenir,
-            Helvetica, sans-serif;
-          /* iPad: no rubber-band scroll, no double-tap zoom, no text selection
-             while drawing — the canvas owns all touch gestures */
-          overscroll-behavior: none;
+          font-family: ${T.mono};
           touch-action: manipulation;
           -webkit-user-select: none;
           user-select: none;
@@ -3199,12 +3708,12 @@ export default function Home() {
       <style jsx>{`
         /* 100dvh = the REAL visible height on iPad Safari (100vh hides behind
            the browser chrome and cut off the bottom buttons) */
-        .app { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
+        .app { display: flex; width: 100vw; height: 100vh; height: 100dvh; overflow: hidden; }
 
         /* floating swatch following the pointer during a colour drag */
         .dragGhost {
           position: fixed; z-index: 40; width: 30px; height: 30px;
-          border-radius: 10px; pointer-events: none;
+          border-radius: 50%; pointer-events: none;
           transform: translate(-50%, -130%);
           border: 2px solid #ffffff; box-shadow: 0 4px 14px rgba(0,0,0,0.45);
         }
@@ -3213,12 +3722,12 @@ export default function Home() {
           min-width: 0; min-height: 0;
         }
         /* fixed Figma/Photoshop-style pasteboard: fills the work area, no
-           scrollbars. The viewport-sized canvas fills it; pan/zoom is a transform. */
+           scrollbars. The viewport-sized canvas fills it; pan/zoom is a transform.
+           Flat charcoal surround (Figma "Beads-UI") — a neutral dark ground so it
+           never biases the bead colours the designer is judging. */
         .pasteboard {
           position: relative; flex: 1; min-height: 0; overflow: hidden;
-          background: #131313;
-          background-image: radial-gradient(#1c1c1c 1px, transparent 1px);
-          background-size: 22px 22px;
+          background: ${T.bg};
         }
         .board { display: block; touch-action: none; cursor: crosshair; }
         .board.grab { cursor: grab; }
@@ -3227,29 +3736,128 @@ export default function Home() {
           position: absolute; top: 0; left: 0;
           pointer-events: none; touch-action: none;
         }
+
+        /* ── two floating toolbar pills (Figma canvas screen) ── */
+        .tbPill {
+          position: absolute; top: 14px; height: 48px;
+          display: flex; align-items: center; gap: 4px; padding: 0 8px;
+          background: ${T.panel}; border-radius: ${T.radius}px;
+          box-shadow: 0 2px 12px rgba(0,0,0,0.28); z-index: 15;
+        }
+        .tbLeft { left: 14px; }
+        .tbRight { right: 14px; }
+        /* editable artwork title, sitting above the canvas top-left */
+        .canvasName {
+          position: absolute; top: 72px; left: 22px; z-index: 11;
+          width: auto; max-width: 40vw; background: none; border: none; outline: none;
+          color: ${T.light}; font-family: ${T.mono}; font-size: 20px;
+          letter-spacing: 0.01em; padding: 2px 6px; border-radius: 6px;
+          white-space: nowrap; display: inline-block; cursor: default;
+        }
+        .canvasName::placeholder { color: ${T.light}; }
+        .canvasName.editing {
+          width: 200px; cursor: text; color: ${T.ink};
+          background: ${T.pill}; box-shadow: inset 0 0 0 1px ${T.accent};
+        }
+        /* bigger touch targets: the icon stays the same, the tappable box grows */
+        .tbIcon {
+          width: 42px; height: 42px; display: flex; align-items: center;
+          justify-content: center; border: none; background: none;
+          color: ${T.inkSoft}; border-radius: 10px; cursor: pointer; transition: all 0.12s;
+        }
+        @media (hover: hover) { .tbIcon:hover { color: ${T.ink}; background: rgba(255,255,255,0.08); } }
+        .tbIcon.on { color: ${T.ink}; background: rgba(255,255,255,0.16); }
+        .tbColor {
+          position: relative; width: 30px; height: 30px; margin-left: 6px; padding: 0;
+          border: 2px solid rgba(255,255,255,0.55); border-radius: 50%;
+          cursor: pointer; touch-action: none;
+        }
+        /* invisible ring extends the tap area beyond the 30px dot */
+        .tbColor::after { content: ''; position: absolute; inset: -7px; border-radius: 50%; }
+        .tbColor.on { box-shadow: 0 0 0 2px ${T.accent}; }
+
+        /* ── left brush-size rail ── */
+        .brushRail {
+          position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+          display: flex; flex-direction: column; align-items: center; gap: 12px;
+          padding: 18px 10px; background: ${T.panel}; border-radius: ${T.radius}px;
+          box-shadow: 0 2px 12px rgba(0,0,0,0.22); z-index: 12;
+        }
+        /* the input is a wide (40px) touch target; the visible track is a thin
+           strip painted down its centre, so it's easy to grab yet still slim. */
+        .vSlider {
+          -webkit-appearance: none; appearance: none;
+          writing-mode: vertical-lr; direction: rtl;
+          width: 40px; height: 320px; max-height: 48vh;
+          background: transparent;
+          background-image: linear-gradient(${T.track}, ${T.track});
+          background-size: 10px 100%; background-position: center; background-repeat: no-repeat;
+          outline: none; cursor: pointer; touch-action: none;
+        }
+        .vSlider::-webkit-slider-thumb {
+          -webkit-appearance: none; appearance: none;
+          width: 34px; height: 26px; border-radius: 20px; background: ${T.thumb};
+          border: none; cursor: pointer;
+        }
+        .vSlider::-moz-range-track { background: transparent; }
+        .vSlider::-moz-range-thumb {
+          width: 34px; height: 26px; border: none; border-radius: 20px;
+          background: ${T.thumb}; cursor: pointer;
+        }
+        .brushRailVal { font-family: ${T.mono}; font-size: 12px; color: ${T.ink}; }
+
+        /* ── right colour rail (the palette) ── */
+        .paletteRail {
+          position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+          display: flex; flex-direction: column; align-items: center; gap: 12px;
+          padding: 14px 12px; background: ${T.panel}; border-radius: ${T.radius}px;
+          box-shadow: 0 2px 12px rgba(0,0,0,0.22); z-index: 12;
+          max-height: 86%; overflow-y: auto; -webkit-overflow-scrolling: touch;
+        }
+        .railSw {
+          flex-shrink: 0; width: 42px; height: 42px; border-radius: 50%; cursor: pointer;
+          border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.18);
+          touch-action: none;
+        }
+        .railSw.on { border-color: ${T.ink}; }
+        .railAdd {
+          flex-shrink: 0; width: 42px; height: 42px; border-radius: 50%;
+          background: rgba(255,255,255,0.06); border: 1px dashed rgba(255,255,255,0.32);
+          color: ${T.inkSoft}; font-size: 20px; line-height: 1; cursor: pointer;
+        }
+        .railAdd:hover { color: ${T.ink}; background: rgba(255,255,255,0.12); }
+
+        /* ── undo / redo (bottom-left) ── */
+        .undoRedo { position: absolute; left: 14px; bottom: 14px; display: flex; gap: 8px; z-index: 12; }
+        .undoRedo button {
+          width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+          border: none; background: ${T.panel}; color: ${T.inkSoft};
+          border-radius: 10px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        @media (hover: hover) { .undoRedo button:hover { color: ${T.ink}; background: #727270; } }
+
         .zoomCtl {
-          position: absolute; left: 14px; bottom: 14px;
+          position: absolute; right: 14px; bottom: 14px;
           display: flex; align-items: center; gap: 2px;
-          background: ${T.panelSolid}; border: 1px solid ${T.line};
-          border-radius: ${T.radius}px; padding: 3px;
+          background: ${T.panel}; border-radius: ${T.radius}px; padding: 3px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.2); z-index: 12;
         }
         .zoomCtl button {
           border: none; background: none; color: ${T.ink}; cursor: pointer;
-          font-family: ${T.mono}; font-size: 14px; width: 30px; height: 26px;
-          border-radius: 4px;
+          font-family: ${T.mono}; font-size: 15px; width: 40px; height: 40px;
+          border-radius: 8px;
         }
-        .zoomCtl button:hover { background: #1d1d1d; }
-        .zoomCtl .zval { width: 54px; font-size: 11px; }
-        .zsep { width: 1px; height: 18px; background: ${T.line}; margin: 0 3px; }
+        @media (hover: hover) { .zoomCtl button:hover { background: #6f6f6d; } }
+        .zoomCtl .zval { width: 56px; font-size: 12px; }
 
         /* image-adjust mode banner */
         .adjustBar {
-          position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+          position: absolute; top: 74px; left: 50%; transform: translateX(-50%);
           display: flex; align-items: center; gap: 12px;
           background: ${T.panelSolid}; border: 1px solid ${T.accent};
           border-radius: ${T.radius}px; padding: 8px 12px;
           font-family: ${T.mono}; font-size: 9px; letter-spacing: 0.08em;
-          color: ${T.ink}; white-space: nowrap;
+          color: ${T.ink}; white-space: nowrap; z-index: 16;
         }
         .adjustBar button {
           border: none; background: ${T.accent}; color: #fff; cursor: pointer;
@@ -3257,120 +3865,153 @@ export default function Home() {
           letter-spacing: 0.08em; padding: 6px 14px; border-radius: 4px;
         }
 
-        /* floating Draw/Erase/Select strip — right edge, ≥44px touch targets */
-        .toolStrip {
-          position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
-          display: flex; flex-direction: column; gap: 5px;
-          background: ${T.panelSolid}; border: 1px solid ${T.line};
-          border-radius: ${T.radius}px; padding: 5px;
+        /* ── selection tools — compact 2-row bar (Figma 52:792) ── */
+        .selPanel {
+          position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+          display: flex; flex-direction: column; gap: 8px; z-index: 16;
+          background: ${T.bg}; border-radius: ${T.radius}px; padding: 14px 16px;
+          box-shadow: 0 10px 30px rgba(0,0,0,0.45);
         }
-        .stripBtn {
-          width: 56px; height: 56px;
-          display: flex; flex-direction: column; align-items: center;
-          justify-content: center; gap: 4px;
-          border: none; background: none; color: ${T.inkSoft};
-          border-radius: 5px; cursor: pointer;
-          font-family: ${T.mono}; font-size: 8px; text-transform: uppercase;
-          letter-spacing: 0.08em; transition: all 0.12s;
+        .selRow { display: flex; align-items: center; justify-content: center; gap: 10px; }
+        .selPatternLbl {
+          font-family: ${T.mono}; font-size: 15px; color: ${T.light};
+          width: 64px; flex-shrink: 0;
         }
-        .stripBtn:hover { color: ${T.ink}; background: #1d1d1d; }
-        .stripBtn.on {
-          color: ${T.ink}; background: #161616;
-          box-shadow: inset 0 0 0 1px ${T.accent};
+        .selChip {
+          border: none; background: ${T.panel}; color: ${T.ink}; cursor: pointer;
+          border-radius: ${T.radius}px; padding: 6px 16px; font-family: ${T.mono};
+          font-size: 15px; white-space: nowrap;
         }
-        .stripBtn.on svg { color: ${T.accent}; }
-        .stripSep { height: 1px; background: ${T.line}; margin: 3px 6px; }
+        .selChip:hover:not(:disabled) { background: #757570; }
+        .selChip:disabled { opacity: 0.4; cursor: not-allowed; }
 
-        /* floating Procreate-style layers panel */
+        /* mirror preview: a ✓ centred on each of the 4 ghost copies */
+        .mirrorPick {
+          position: absolute; z-index: 17; transform: translate(-50%, -50%);
+          width: 40px; height: 40px; border-radius: 50%; border: 2px solid #fff;
+          background: ${T.accent}; color: #fff; cursor: pointer;
+          display: flex; align-items: center; justify-content: center;
+          box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+        }
+        .mirrorPick:hover { transform: translate(-50%, -50%) scale(1.08); }
+        .floatCancel {
+          position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+          z-index: 17; border: none; background: ${T.bg}; color: ${T.ink};
+          cursor: pointer; border-radius: ${T.radius}px; padding: 10px 22px;
+          font-family: ${T.mono}; font-size: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+        }
+        /* placement confirm: ✓ / ✗ floating above the dragged design */
+        .placeConfirm {
+          position: absolute; z-index: 17; transform: translate(-50%, -150%);
+          display: flex; gap: 8px;
+        }
+        .placeBtn {
+          width: 42px; height: 42px; border-radius: 50%; border: 2px solid #fff;
+          cursor: pointer; display: flex; align-items: center; justify-content: center;
+          box-shadow: 0 4px 14px rgba(0,0,0,0.45); font-size: 22px; line-height: 1;
+        }
+        .placeBtn.ok { background: ${T.accent}; color: #fff; }
+        .placeBtn.no { background: ${T.panelSolid}; color: ${T.ink}; }
+
+        /* ── layers panel (Figma 52:685) ── */
         .layersPanel {
-          position: absolute; right: 84px; top: 50%; transform: translateY(-50%);
-          width: 210px; max-height: 78%;
-          display: flex; flex-direction: column;
-          background: ${T.panelSolid}; border: 1px solid ${T.line};
-          border-radius: ${T.radius}px; padding: 8px;
-          box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 20;
+          position: absolute; right: 92px; top: 74px; bottom: 14px;
+          width: 340px; max-width: 76vw;
+          display: flex; flex-direction: column; gap: 12px;
+          background: ${T.bg}; border: 1px solid ${T.line};
+          border-radius: ${T.radius}px; padding: 16px;
+          box-shadow: 0 14px 36px rgba(0,0,0,0.5); z-index: 20;
+          animation: popIn 0.16s ease-out;
         }
-        .layersHead {
-          display: flex; align-items: center; justify-content: space-between;
-          font-family: ${T.mono}; font-size: 10px; letter-spacing: 0.12em;
-          color: ${T.inkSoft}; padding: 2px 4px 8px;
-        }
-        .lpHeadBtns { display: flex; gap: 6px; align-items: center; }
-        .lpAdd {
-          border: none; background: ${T.pill}; color: ${T.ink}; cursor: pointer;
-          width: 24px; height: 24px; border-radius: 6px; font-size: 17px; line-height: 1;
+        .lpHead { display: flex; align-items: center; justify-content: space-between; }
+        .lpTitle { font-family: ${T.mono}; font-size: 28px; color: ${T.ink}; }
+        .lpHeadBtns { display: flex; align-items: center; gap: 4px; }
+        .lpAddBtn {
+          border: none; background: none; color: ${T.ink}; cursor: pointer;
+          width: 40px; height: 40px; border-radius: 8px; font-size: 26px; line-height: 1;
           display: flex; align-items: center; justify-content: center; padding: 0;
         }
-        .lpAdd:hover { background: #242424; }
-        .lpImg { font-size: 0; }
-        .lpSwatch {
-          flex-shrink: 0; width: 20px; height: 20px; padding: 0; border: 1px solid ${T.line};
-          border-radius: 5px; background: none; cursor: pointer;
+        .lpAddBtn:hover { background: rgba(255,255,255,0.1); }
+        .lpImgBtn { color: ${T.inkSoft}; }
+        .lpImgBtn:hover { color: ${T.ink}; }
+        .lpList {
+          flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px;
+          overflow-y: auto; -webkit-overflow-scrolling: touch;
         }
-        .lpSwatch::-webkit-color-swatch-wrapper { padding: 0; }
-        .lpSwatch::-webkit-color-swatch { border: none; border-radius: 4px; }
-        .lpAdjust {
-          flex-shrink: 0; border: none; background: ${T.pill}; color: ${T.inkSoft};
-          cursor: pointer; border-radius: 6px; padding: 4px 7px;
-          font-family: ${T.mono}; font-size: 9px; letter-spacing: 0.04em;
+        /* deselected rows are a dull dark grey; the SELECTED row is bright/light */
+        .lpRow {
+          flex-shrink: 0; display: flex; align-items: center; gap: 12px;
+          height: 64px; padding: 0 14px 0 8px; border-radius: 8px; cursor: pointer;
+          background: ${T.panel}; touch-action: none; -webkit-touch-callout: none;
+          -webkit-user-select: none; user-select: none;
         }
-        .lpAdjust:hover { color: ${T.ink}; }
-        .lpAdjust.on { background: ${T.ink}; color: ${T.bg}; }
-        .lpAdjust:disabled { opacity: 0.3; cursor: not-allowed; }
-        .layerRow.adjusting { border-color: ${T.accent}; }
-        .lpOpacity {
-          display: flex; align-items: center; gap: 8px; padding: 8px 4px 2px;
-          margin-top: 6px; border-top: 1px solid ${T.line};
+        .lpRow.active { background: ${T.artboard}; }
+        .lpRow.dragging {
+          position: relative; z-index: 3; box-shadow: 0 8px 22px rgba(0,0,0,0.45);
+          cursor: grabbing;
         }
-        .layersList {
-          display: flex; flex-direction: column; gap: 4px;
-          overflow-y: auto; -webkit-overflow-scrolling: touch; min-height: 0;
+        .lpThumb {
+          flex-shrink: 0; width: 56px; height: 44px; border-radius: 6px;
+          background: #4a4a48; overflow: hidden; padding: 0; border: none;
+          display: flex; align-items: center; justify-content: center;
         }
-        .layerRow {
-          display: flex; align-items: center; gap: 6px;
-          background: ${T.pill}; border-radius: 7px; padding: 7px 8px;
-          cursor: pointer; border: 1px solid transparent; transition: background 0.12s;
-        }
-        .layerRow:hover { background: #242424; }
-        .layerRow.on { border-color: ${T.accent}; background: #1b1b1b; }
-        .lpEye, .lpLock {
-          flex-shrink: 0; border: none; background: none; cursor: pointer;
-          color: ${T.inkSoft}; display: flex; align-items: center; padding: 2px;
-        }
-        .lpEye:hover, .lpLock:hover { color: ${T.ink}; }
+        .lpThumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .lpThumbColor { cursor: pointer; }
+        .lpThumbColor::-webkit-color-swatch-wrapper { padding: 0; }
+        .lpThumbColor::-webkit-color-swatch { border: none; border-radius: 6px; }
+        /* text + icons: light on the dull deselected rows, dark on the bright active row */
         .lpName {
-          flex: 1; min-width: 0; font-family: ${T.mono}; font-size: 11px;
-          color: ${T.ink}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-          display: flex; align-items: baseline; gap: 6px;
+          flex: 1; min-width: 0; font-family: ${T.mono}; font-size: 17px;
+          color: ${T.artboard}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        .lpLockTag { font-size: 8px; font-style: normal; color: ${T.inkSoft};
-          text-transform: uppercase; letter-spacing: 0.08em; }
-        .lpCount { flex-shrink: 0; font-family: ${T.mono}; font-size: 9px; color: ${T.inkSoft}; }
-        .layerActions {
-          display: flex; gap: 4px; padding-top: 8px; margin-top: 6px;
-          border-top: 1px solid ${T.line};
+        .lpRow.active .lpName { color: ${T.bg}; }
+        .lpRowIcon {
+          flex-shrink: 0; border: none; background: none; cursor: pointer;
+          color: ${T.artboard}; display: flex; align-items: center; justify-content: center;
+          padding: 0; width: 40px; height: 40px; border-radius: 8px;
         }
-        .layerActions button {
-          flex: 1; min-width: 0; border: none; background: ${T.pill}; color: ${T.ink};
-          cursor: pointer; border-radius: 6px; padding: 7px 2px;
-          font-family: ${T.mono}; font-size: 9px; letter-spacing: 0.02em;
+        .lpRow.active .lpRowIcon { color: ${T.bg}; }
+        @media (hover: hover) { .lpRowIcon:hover { background: rgba(255,255,255,0.12); } }
+        .lpEditBtn {
+          flex-shrink: 0; border: none; background: none; color: ${T.artboard}; cursor: pointer;
+          width: 40px; height: 40px; border-radius: 8px; padding: 0;
+          display: flex; align-items: center; justify-content: center;
         }
-        .layerActions button:hover { background: #242424; }
-        .layerActions button:disabled { opacity: 0.3; cursor: not-allowed; }
-        .layerActions button.on { background: ${T.ink}; color: ${T.bg}; }
-        .lpHint { font-family: ${T.mono}; font-size: 8.5px; color: ${T.inkSoft};
-          line-height: 1.5; padding: 8px 4px 2px; }
+        .lpRow.active .lpEditBtn:not(.on) { color: ${T.bg}; }
+        @media (hover: hover) { .lpEditBtn:hover { background: rgba(255,255,255,0.12); } }
+        .lpEditBtn.on { background: ${T.accent}; color: #fff; }
+        .lpEditBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .lpOpacity {
+          display: flex; align-items: center; gap: 10px; padding-top: 4px;
+        }
+        .lpOpLabel { font-family: ${T.mono}; font-size: 14px; color: ${T.inkSoft}; }
+        /* bottom action bar: light strip, dark text, dividers */
+        .lpBar {
+          flex-shrink: 0; display: flex; align-items: center;
+          background: ${T.artboard}; border-radius: 8px; height: 48px; overflow: hidden;
+        }
+        .lpBar button {
+          flex: 1; min-width: 0; border: none; background: none; color: ${T.bg};
+          cursor: pointer; height: 100%; padding: 0 4px;
+          font-family: ${T.mono}; font-size: 14px;
+        }
+        @media (hover: hover) { .lpBar button:hover:not(:disabled) { background: rgba(0,0,0,0.06); } }
+        /* .on must beat :hover (incl. iOS sticky hover) so Alpha lock turns green at once */
+        .lpBar button.on { background: ${T.accent} !important; color: #fff !important; }
+        .lpBar button:disabled { opacity: 0.35; cursor: not-allowed; }
+        .lpBarDiv { width: 1px; height: 22px; background: rgba(51,51,50,0.25); flex-shrink: 0; }
 
-        /* active-layer-not-editable banner (left panel) */
+        /* active-layer-not-editable banner — floats under the toolbar */
         .lockNote {
-          background: #1b1b1b; border: 1px solid ${T.accent};
-          border-radius: ${T.radius}px; padding: 8px 10px;
-          font-family: ${T.mono}; font-size: 9px; letter-spacing: 0.04em;
-          color: ${T.ink}; line-height: 1.5;
+          position: absolute; top: 74px; left: 50%; transform: translateX(-50%);
+          background: ${T.panelSolid}; border: 1px solid ${T.accent};
+          border-radius: ${T.radius}px; padding: 8px 12px;
+          font-family: ${T.mono}; font-size: 10px; letter-spacing: 0.04em;
+          color: ${T.ink}; line-height: 1.5; z-index: 16; white-space: nowrap;
         }
         .toast {
           position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%);
-          background: #1b1b1b; border: 1px solid ${T.accent};
+          background: ${T.panelSolid}; border: 1px solid ${T.accent};
           border-radius: ${T.radius}px; padding: 9px 14px; max-width: 80%;
           font-family: ${T.mono}; font-size: 10px; letter-spacing: 0.04em;
           color: ${T.ink}; text-align: center; pointer-events: none; z-index: 40;
@@ -3381,45 +4022,145 @@ export default function Home() {
           from { opacity: 0; transform: translate(-50%, 6px); }
           to { opacity: 1; transform: translate(-50%, 0); }
         }
-        .stageInfo {
-          flex-shrink: 0; color: ${T.inkSoft}; font-size: 10px; font-family: ${T.mono};
-          text-transform: uppercase; letter-spacing: 0.08em;
-          padding: 9px 16px; border-top: 1px solid ${T.line}; background: ${T.bg};
-        }
         .buildTag {
           margin-left: 10px; font-family: ${T.mono}; font-size: 10px;
           letter-spacing: 0.08em; color: ${T.inkSoft}; opacity: 0.7;
         }
 
-        .panel {
-          width: 252px; flex-shrink: 0;
-          background: ${T.panel};
-          background-image: radial-gradient(${T.line} 1px, transparent 1px);
-          background-size: 14px 14px;
-          padding: 18px 14px; overflow: hidden;
-          display: flex; flex-direction: column; gap: 11px;
+        /* ── ☰ dropdown menu ── */
+        .menuScrim { position: absolute; inset: 0; z-index: 30; }
+        .menuPop {
+          position: absolute; top: 62px; left: 20px; width: 208px; z-index: 31;
+          display: flex; flex-direction: column; padding: 6px;
+          background: ${T.panelSolid}; border: 1px solid ${T.line};
+          border-radius: ${T.radius}px; box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+          animation: popIn 0.14s ease-out;
         }
-        .panel.left { border-right: 1px solid ${T.line}; }
-        .panel.right { border-left: 1px solid ${T.line}; }
-        /* both panels: cards scroll, the pinned cluster below stays visible */
-        .panelScroll {
-          flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
-          -webkit-overflow-scrolling: touch;
-          display: flex; flex-direction: column; gap: 11px;
+        @keyframes popIn {
+          from { transform: translateY(-6px); opacity: 0.4; }
+          to { transform: none; opacity: 1; }
         }
-        .saveCluster {
-          flex-shrink: 0; display: flex; flex-direction: column; gap: 7px;
-          padding-top: 11px; border-top: 1px solid ${T.line};
+        .menuItem {
+          border: none; background: none; color: ${T.ink}; cursor: pointer;
+          text-align: left; padding: 11px 12px; border-radius: 6px;
+          font-family: ${T.mono}; font-size: 15px; letter-spacing: 0.01em;
         }
+        .menuItem:hover { background: #6f6f6d; }
+        .menuItem:disabled { opacity: 0.4; cursor: not-allowed; }
+        .menuDiv { height: 1px; background: ${T.line}; margin: 2px 8px; }
+
+        /* ── Artwork Details modal ── */
+        .detailsModal {
+          width: 100%; max-width: 544px; max-height: 84vh;
+          display: flex; flex-direction: column;
+          background: ${T.panel}; border: 1px solid ${T.line};
+          border-radius: ${T.radius}px; box-shadow: 0 20px 60px rgba(0,0,0,0.55);
+          animation: popIn 0.16s ease-out; overflow: hidden;
+        }
+        .detailsHead {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 16px 18px; border-bottom: 1px solid ${T.line};
+        }
+        .detailsTitle {
+          font-family: ${T.serif}; font-size: 26px; font-weight: 500;
+          color: ${T.ink}; letter-spacing: 0.01em;
+        }
+        .detailsScroll {
+          flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+          display: flex; flex-direction: column; gap: 12px; padding: 16px 18px 20px;
+        }
+        .drawerClose {
+          border: none; background: none; color: ${T.inkSoft};
+          font-size: 26px; line-height: 1; cursor: pointer; padding: 0 4px;
+        }
+        .drawerClose:hover { color: ${T.ink}; }
+        .drawerInfo {
+          font-family: ${T.mono}; font-size: 11px; color: ${T.inkSoft};
+          line-height: 1.6; letter-spacing: 0.02em; padding: 4px 2px;
+        }
+
+        /* ── colour picker panel (Figma 52:607) ── */
+        .colorPanel {
+          position: absolute; top: 74px; right: 14px; bottom: 14px; width: 340px; max-width: 88vw;
+          z-index: 31;
+          display: flex; flex-direction: column; gap: 14px; padding: 16px;
+          background: ${T.bg}; border: 1px solid ${T.line};
+          border-radius: ${T.radius}px; box-shadow: 0 14px 36px rgba(0,0,0,0.5);
+          overflow-y: auto; -webkit-overflow-scrolling: touch;
+          animation: popIn 0.16s ease-out;
+        }
+        .cpHead { display: flex; align-items: center; justify-content: space-between; }
+        .cpTitle { font-family: ${T.mono}; font-size: 28px; color: ${T.ink}; }
+        .cpLabel {
+          font-family: ${T.mono}; font-size: 18px; color: ${T.inkSoft};
+        }
+        /* History / palette swatch container (Morii Darker box) */
+        .cpBox {
+          display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+          background: ${T.pill}; border-radius: 8px; padding: 8px 10px;
+        }
+        .cpSw {
+          width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+          border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.18);
+          flex-shrink: 0;
+        }
+        .cpSw.on { border-color: ${T.ink}; }
+        .cpSw.add {
+          background: rgba(255,255,255,0.06); border: 1px dashed rgba(255,255,255,0.32);
+          color: ${T.inkSoft}; font-size: 16px; line-height: 1;
+        }
+        .cpSw.add:hover { color: ${T.ink}; background: rgba(255,255,255,0.12); }
+        .cpPalHead { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
+        .cpNew {
+          border: none; background: ${T.pill}; color: ${T.inkSoft}; cursor: pointer;
+          border-radius: 6px; padding: 5px 11px; font-family: ${T.mono}; font-size: 14px;
+        }
+        .cpNew:hover { background: #6f6f6d; color: ${T.ink}; }
+        .cpPalList { display: flex; flex-direction: column; gap: 10px; }
+        .cpEmpty { font-family: ${T.mono}; font-size: 12px; line-height: 1.5; color: ${T.inkSoft}; }
+        .cpPal {
+          background: ${T.pill}; border: 1px solid transparent; cursor: pointer;
+          border-radius: 8px; padding: 10px 11px; display: flex; flex-direction: column; gap: 9px;
+        }
+        .cpPal.active { border-color: ${T.accent}; }
+        .cpPalTop { display: flex; align-items: center; gap: 6px; }
+        .cpPalName {
+          flex: 1; min-width: 0; background: none; border: none; outline: none; cursor: default;
+          color: ${T.ink}; font-family: ${T.mono}; font-size: 16px; letter-spacing: 0.01em;
+          padding: 3px 4px; border-radius: 6px;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .cpPalName.editing {
+          cursor: text; background: ${T.bg}; box-shadow: inset 0 0 0 1px ${T.accent};
+        }
+        .cpPalEdit {
+          flex-shrink: 0; border: none; background: ${T.pill}; color: ${T.inkSoft};
+          cursor: pointer; border-radius: 6px; padding: 4px 9px;
+          font-family: ${T.mono}; font-size: 12px;
+        }
+        .cpPalEdit:hover { color: ${T.ink}; }
+        .cpPalEdit.on { background: ${T.accent}; color: #fff; }
+        .cpPalDel {
+          border: none; background: none; color: ${T.inkSoft}; cursor: pointer;
+          font-size: 18px; line-height: 1; padding: 0 4px; flex-shrink: 0;
+        }
+        .cpPalDel:hover { color: ${T.accent}; }
+        .cpPalRow { display: flex; flex-wrap: wrap; gap: 6px; }
+        .cpSw.rm {
+          color: #fff; font-size: 15px; line-height: 1; display: flex;
+          align-items: center; justify-content: center;
+          box-shadow: inset 0 0 0 1px rgba(0,0,0,0.25), inset 0 0 0 2px rgba(255,255,255,0.5);
+        }
+
         .brand {
-          font-size: 18px; font-weight: 700; letter-spacing: 0.04em;
-          font-family: ${T.mono}; display: inline-flex; align-items: center;
+          font-size: 26px; font-weight: 500; letter-spacing: 0.01em;
+          font-family: ${T.serif}; color: ${T.ink}; display: inline-flex; align-items: center;
         }
         .dot {
           width: 8px; height: 8px; border-radius: 50%;
           background: ${T.accent}; margin-left: 7px;
         }
-        .sub { color: ${T.inkSoft}; font-size: 10px; margin-top: -8px;
+        .sub { color: ${T.inkSoft}; font-size: 10px; margin-top: 2px;
           font-family: ${T.mono}; letter-spacing: 0.12em; }
 
         .tip { color: ${T.inkSoft}; opacity: 0.8; }
@@ -3444,8 +4185,8 @@ export default function Home() {
         .ghost:disabled:hover { background: ${T.pill}; }
 
         /* accessibility: clear keyboard focus ring on every control */
-        .panel button:focus-visible, .panel input:focus-visible,
-        .panel label:focus-within { outline: 2px solid ${T.accent}; outline-offset: 1px; }
+        button:focus-visible, input:focus-visible,
+        label:focus-within { outline: 2px solid ${T.accent}; outline-offset: 1px; }
 
         .card {
           background: ${T.panelSolid};
@@ -3465,7 +4206,7 @@ export default function Home() {
           border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 600;
           transition: background 0.12s;
         }
-        .seg:hover { background: #1d1d1d; }
+        .seg:hover { background: #6f6f6d; }
         .seg.on { background: ${T.active}; color: ${T.activeInk}; }
 
         .pillRow { display: flex; gap: 8px; }
@@ -3495,7 +4236,7 @@ export default function Home() {
           background: ${T.pill}; border: none; border-radius: 8px; padding: 7px 9px;
           cursor: pointer; text-align: left; transition: background 0.12s;
         }
-        .savedApply:hover { background: #242424; }
+        .savedApply:hover { background: #6f6f6d; }
         .savedName { font-family: ${T.mono}; font-size: 10px; color: ${T.ink};
           text-transform: uppercase; letter-spacing: 0.06em; }
         .savedSw { display: flex; flex-wrap: wrap; gap: 3px; }
@@ -3510,7 +4251,7 @@ export default function Home() {
           color: ${T.ink}; border-radius: 10px; cursor: pointer; font-size: 13px;
           font-weight: 600; text-align: center; display: block; transition: background 0.12s;
         }
-        .ghost:hover, .fileBtn:hover { background: #1d1d1d; }
+        .ghost:hover, .fileBtn:hover { background: #6f6f6d; }
         .ghost.half { flex: 1; min-width: 0; }
         .primary {
           padding: 14px; border: none; cursor: pointer;
@@ -3520,14 +4261,28 @@ export default function Home() {
           transition: opacity 0.12s;
         }
         .primary:hover { opacity: 0.88; }
+        .primary.half { flex: 1; min-width: 0; }
+
+        /* export-file picker list */
+        .pickList { display: flex; flex-direction: column; gap: 6px; max-height: 46vh; overflow-y: auto; }
+        .pickRow {
+          display: flex; align-items: center; gap: 10px; cursor: pointer;
+          background: ${T.pill}; border: 1px solid transparent; border-radius: 8px; padding: 10px 12px;
+        }
+        .pickRow.on { border-color: ${T.accent}; }
+        .pickRow input { width: 18px; height: 18px; accent-color: ${T.accent}; flex-shrink: 0; cursor: pointer; }
+        .pickName {
+          flex: 1; min-width: 0; font-family: ${T.mono}; font-size: 15px; color: ${T.ink};
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .pickMeta { font-family: ${T.mono}; font-size: 12px; color: ${T.inkSoft}; flex-shrink: 0; }
 
         /* technique chooser modal */
         .modalScrim {
           position: fixed; inset: 0; z-index: 60; display: flex;
           align-items: center; justify-content: center; padding: 24px;
-          background: rgba(0,0,0,0.72);
-          background-image: radial-gradient(${T.line} 1px, transparent 1px);
-          background-size: 16px 16px;
+          background: rgba(51,51,50,0.5);
+          backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
         }
         .modal {
           width: 100%; max-width: 460px; display: flex; flex-direction: column; gap: 14px;
@@ -3549,7 +4304,7 @@ export default function Home() {
           background: ${T.pill}; border: 1px solid ${T.line};
           border-radius: 10px; padding: 16px; transition: all 0.12s;
         }
-        .techCard:hover { background: #1d1d1d; border-color: ${T.inkSoft}; }
+        .techCard:hover { background: #6f6f6d; border-color: ${T.inkSoft}; }
         .techCard.on { border-color: ${T.accent}; }
         .techName { font-size: 14px; font-weight: 700; color: ${T.ink}; }
         .techDesc { font-family: ${T.mono}; font-size: 10px; line-height: 1.5; color: ${T.inkSoft}; }
@@ -3559,8 +4314,6 @@ export default function Home() {
           position: fixed; inset: 0; z-index: 50; display: flex;
           align-items: flex-start; justify-content: center; overflow-y: auto;
           padding: 40px 24px; background: ${T.bg};
-          background-image: radial-gradient(${T.line} 1px, transparent 1px);
-          background-size: 16px 16px;
         }
         .galleryLoading {
           margin-top: 18vh; font-family: ${T.mono}; font-size: 12px;
@@ -3599,7 +4352,7 @@ export default function Home() {
           font-family: ${T.mono}; font-size: 9px; text-transform: uppercase;
           letter-spacing: 0.04em; padding: 8px 9px; border-radius: 6px;
         }
-        .artActions button:hover { background: #242424; }
+        .artActions button:hover { background: #6f6f6d; }
         .artActions .del:hover { color: #fff; background: ${T.accent}; }
         .galleryFoot { display: flex; gap: 8px; }
         .galleryHint { text-align: center; }
@@ -3692,6 +4445,94 @@ function IconImage() {
       <circle cx="8.5" cy="8.5" r="1.5" />
       <path d="M21 15l-5-5L5 21" />
     </svg>
+  )
+}
+function IconEdit() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+    </svg>
+  )
+}
+function IconCheck() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6L9 17l-5-5" />
+    </svg>
+  )
+}
+function IconHome() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 10.5L12 3l9 7.5" />
+      <path d="M5 9.5V21h14V9.5" />
+    </svg>
+  )
+}
+function IconMenu() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h18" /><path d="M3 12h18" /><path d="M3 18h18" />
+    </svg>
+  )
+}
+function IconUndo() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 14L4 9l5-5" />
+      <path d="M4 9h11a5 5 0 0 1 0 10h-1" />
+    </svg>
+  )
+}
+function IconRedo() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 14l5-5-5-5" />
+      <path d="M20 9H9a5 5 0 0 0 0 10h1" />
+    </svg>
+  )
+}
+
+// Canvas-size fields with an mm / cm / in unit toggle. canvasCm stays the source
+// of truth (centimetres, clamped 1–300); this converts to/from the chosen unit
+// just for display + entry.
+function SizeFields({ canvasCm, setCanvasCm, unit, setUnit }) {
+  const toU = (cm) => (unit === 'mm' ? cm * 10 : unit === 'in' ? cm / 2.54 : cm)
+  const fromU = (v) => (unit === 'mm' ? v / 10 : unit === 'in' ? v * 2.54 : v)
+  const dec = unit === 'in' ? 2 : unit === 'mm' ? 0 : 1
+  const disp = (cm) => { const f = 10 ** dec; return Math.round(toU(cm) * f) / f }
+  const setDim = (dim, v) => setCanvasCm((c) => ({ ...c, [dim]: clampNum(fromU(v), 1, 300) }))
+  const label = unit === 'in' ? 'in' : unit
+  return (
+    <>
+      <div className="unitRow">
+        {['mm', 'cm', 'in'].map((u) => (
+          <button key={u} className={`unitBtn ${unit === u ? 'on' : ''}`} onClick={() => setUnit(u)}>{u}</button>
+        ))}
+      </div>
+      <div className="sizeRow">
+        <Pill value={disp(canvasCm.w)} label={`${label} W`} step={dec ? 0.1 : 1} onChange={(v) => setDim('w', v)} />
+        <Pill value={disp(canvasCm.h)} label={`${label} H`} step={dec ? 0.1 : 1} onChange={(v) => setDim('h', v)} />
+      </div>
+      <style jsx>{`
+        .unitRow { display: flex; gap: 6px; }
+        .unitBtn {
+          flex: 1; padding: 7px 6px; border: none; background: ${T.pill}; color: ${T.ink};
+          border-radius: 7px; cursor: pointer; font-family: ${T.mono}; font-size: 13px;
+          text-transform: uppercase; letter-spacing: 0.04em;
+        }
+        .unitBtn:hover { background: #6f6f6d; }
+        .unitBtn.on { background: ${T.active}; color: ${T.activeInk}; }
+        .sizeRow { display: flex; gap: 8px; }
+      `}</style>
+    </>
   )
 }
 
@@ -3795,4 +4636,112 @@ function HoldButton({ duration = 700, onHold, children }) {
 function clampNum(v, lo, hi) {
   if (isNaN(v)) return lo
   return Math.min(hi, Math.max(lo, v))
+}
+
+// ---- colour maths for the picker (hex ↔ HSV) ----
+function hexToRgb(hex) {
+  let h = (hex || '').replace('#', '')
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('')
+  const n = parseInt(h || '000000', 16)
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
+}
+function rgbToHsv(hex) {
+  const { r, g, b } = hexToRgb(hex)
+  const rn = r / 255, gn = g / 255, bn = b / 255
+  const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn), d = max - min
+  let h = 0
+  if (d) {
+    if (max === rn) h = ((gn - bn) / d) % 6
+    else if (max === gn) h = (bn - rn) / d + 2
+    else h = (rn - gn) / d + 4
+    h *= 60
+    if (h < 0) h += 360
+  }
+  return { h, s: max ? d / max : 0, v: max }
+}
+function hsvToHex(h, s, v) {
+  const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c
+  let r = 0, g = 0, b = 0
+  if (h < 60) { r = c; g = x } else if (h < 120) { r = x; g = c }
+  else if (h < 180) { g = c; b = x } else if (h < 240) { g = x; b = c }
+  else if (h < 300) { r = x; b = c } else { r = c; b = x }
+  const to = (n) => Math.round((n + m) * 255).toString(16).padStart(2, '0')
+  return `#${to(r)}${to(g)}${to(b)}`
+}
+
+// Simple Procreate-style colour picker: a saturation/value square + a hue bar.
+// `color` is the source of truth (hex); hue is held locally so it doesn't jump
+// when the colour goes grey (s/v near 0).
+function ColorPicker({ color, onChange }) {
+  const cur = rgbToHsv(color)
+  const [hue, setHue] = useState(cur.h)
+  useEffect(() => {
+    const h = rgbToHsv(color)
+    if (h.s > 0.03 && h.v > 0.03) setHue(h.h)
+  }, [color])
+  const svRef = useRef(null)
+  const hueRef = useRef(null)
+  const downSV = useRef(false)
+  const downHue = useRef(false)
+  const pickSV = (e) => {
+    const r = svRef.current.getBoundingClientRect()
+    const x = clampNum((e.clientX - r.left) / r.width, 0, 1)
+    const y = clampNum((e.clientY - r.top) / r.height, 0, 1)
+    onChange(hsvToHex(hue, x, 1 - y))
+  }
+  const pickHue = (e) => {
+    const r = hueRef.current.getBoundingClientRect()
+    const x = clampNum((e.clientX - r.left) / r.width, 0, 1)
+    const h = x * 360
+    setHue(h)
+    onChange(hsvToHex(h, cur.s || 1, cur.v || 1))
+  }
+  const hueColor = hsvToHex(hue, 1, 1)
+  return (
+    <div className="cpWrap">
+      <div
+        className="cpSV"
+        ref={svRef}
+        style={{ background: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent), ${hueColor}` }}
+        onPointerDown={(e) => { downSV.current = true; e.currentTarget.setPointerCapture(e.pointerId); pickSV(e) }}
+        onPointerMove={(e) => { if (downSV.current) pickSV(e) }}
+        onPointerUp={() => { downSV.current = false }}
+        onPointerCancel={() => { downSV.current = false }}
+      >
+        <span className="cpSVThumb" style={{ left: `${cur.s * 100}%`, top: `${(1 - cur.v) * 100}%`, background: color }} />
+      </div>
+      <div
+        className="cpHue"
+        ref={hueRef}
+        onPointerDown={(e) => { downHue.current = true; e.currentTarget.setPointerCapture(e.pointerId); pickHue(e) }}
+        onPointerMove={(e) => { if (downHue.current) pickHue(e) }}
+        onPointerUp={() => { downHue.current = false }}
+        onPointerCancel={() => { downHue.current = false }}
+      >
+        <span className="cpHueThumb" style={{ left: `${(hue / 360) * 100}%`, background: hueColor }} />
+      </div>
+      <style jsx>{`
+        .cpWrap { display: flex; flex-direction: column; gap: 12px; }
+        .cpSV {
+          position: relative; width: 100%; height: 230px; border-radius: 8px;
+          touch-action: none; cursor: crosshair;
+        }
+        .cpSVThumb {
+          position: absolute; width: 16px; height: 16px; border-radius: 50%;
+          transform: translate(-50%, -50%); border: 2px solid #fff;
+          box-shadow: 0 0 0 1px rgba(0,0,0,0.4); pointer-events: none;
+        }
+        .cpHue {
+          position: relative; width: 100%; height: 16px; border-radius: 8px;
+          touch-action: none; cursor: pointer;
+          background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+        }
+        .cpHueThumb {
+          position: absolute; top: 50%; width: 18px; height: 18px; border-radius: 50%;
+          transform: translate(-50%, -50%); border: 2px solid #fff;
+          box-shadow: 0 0 0 1px rgba(0,0,0,0.4); pointer-events: none;
+        }
+      `}</style>
+    </div>
+  )
 }
