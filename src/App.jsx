@@ -1,5 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import {
+  IconDraw, IconErase, IconSelect, IconLayers, IconEye, IconEyeOff, IconLock,
+  IconUnlock, IconImage, IconEdit, IconCheck, IconHome, IconMenu, IconUndo, IconRedo,
+} from './icons'
 import { getTechnique, DEFAULT_TECHNIQUE, TECHNIQUES } from './techniques'
+import { fitShape, shapeOutline, adjustShape, shapeLabel } from './lib/quickshape'
 import { renderFullChart, renderLegend, rasterScale, PX_PER_MM } from './lib/chart'
 import {
   listArtworks,
@@ -13,31 +18,94 @@ import {
 // ---- design tokens: "Nothing" design language (see .claude/skills/nothing-design).
 // Monochrome black/white/grey + one red accent used sparingly. Dotted-grid chrome,
 // UPPERCASE monospace labels. Artboard stays light so bead colours stay honest.
-// Morii palette (from the Figma "Beads-UI" design). A calm charcoal workspace —
-// dark surround so it never biases the bead colours the designer is judging
-// (spec §7.5) — with a single muted green accent. Active/selected state uses a
-// light tonal fill, not a loud hue.
-const T = {
-  bg: '#333332', // Morii Darkest — workspace backdrop
-  panel: '#666664', // Morii Dark — toolbar / rails / drawer
-  panelSolid: '#414140', // section blocks (cards in the drawer)
-  ink: '#f7f7f5', // Morii white-alt — primary text / icons
-  inkSoft: '#a8a7a2', // Morii Lighter — muted labels
-  light: '#757570', // Morii Light — mid grey (reads on light or dark)
-  line: '#575757', // Morii Darker — hairlines
-  active: '#dbdad5', // selected = light tonal fill …
-  activeInk: '#333332', // … with dark text
-  accent: '#4a875d', // Morii Green — primary action + active outline
-  pill: '#575757', // Morii Darker — input / control background
-  thumb: '#a8a7a2', // Morii Lighter — slider thumb / knob
-  track: '#333332', // slider track (sunk into the panel)
-  artboard: '#dbdad5', // Morii Lightest — the canvas
+// Morii palette (from the Figma "Beads-UI" design). Two themes share one token
+// vocabulary; `T` is a Proxy that resolves each token from the active theme, so
+// every `${T.x}` in the styled-jsx re-themes for free when `themeState.active`
+// flips. Non-colour tokens (radius, fonts, accent, the always-light artboard) are
+// identical across themes. `row*` tokens keep the layer rows legible either way.
+const FONT = "'Morii Lipi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+const SHARED = {
+  accent: '#4a875d', // Morii Green — primary action + active outline (both themes)
+  artboard: '#dbdad5', // the canvas / light bars — always a warm light grey
+  darkInk: '#333332', // ink that must stay dark (on the light bars/artboard)
   radius: 8,
-  // Morii type system — Morii Lipi is the single face used everywhere
-  // (@font-face in src/fonts.css). `mono` and `serif` are legacy token names kept
-  // for the many existing references; both now resolve to Morii Lipi.
-  mono: "'Morii Lipi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-  serif: "'Morii Lipi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  mono: FONT,
+  serif: FONT,
+}
+const DARK = {
+  ...SHARED,
+  bg: '#333332', panel: '#666664', panelSolid: '#414140',
+  ink: '#f7f7f5', inkSoft: '#a8a7a2', light: '#757570', line: '#575757',
+  active: '#dbdad5', activeInk: '#333332', pill: '#575757', thumb: '#a8a7a2', track: '#333332',
+  rowBg: '#666664', rowActive: '#dbdad5', rowInk: '#dbdad5', rowActiveInk: '#333332',
+  hoverPill: '#757570', overlay: 'rgba(255,255,255,0.1)',
+}
+const LIGHT = {
+  ...SHARED,
+  bg: '#e9e7e1', panel: '#f6f5f1', panelSolid: '#efeee9',
+  ink: '#333332', inkSoft: '#6f6e69', light: '#9a9992', line: '#d9d7d0',
+  active: '#333332', activeInk: '#f7f7f5', pill: '#e6e4dd', thumb: '#8f8e88', track: '#d4d2cb',
+  rowBg: '#e2e0d9', rowActive: '#ffffff', rowInk: '#5a5852', rowActiveInk: '#333332',
+  hoverPill: '#d8d6cf', overlay: 'rgba(0,0,0,0.06)',
+}
+const THEMES = { dark: DARK, light: LIGHT }
+const themeState = { active: 'dark' } // flipped by the theme toggle (below)
+const T = new Proxy({}, { get: (_t, k) => THEMES[themeState.active][k] })
+
+// A soft, synthesised "bead click" — a warm woody tok that snaps as each bead
+// lands, for a tactile feel (iPad can't vibrate from the web, so this is the
+// satisfying cue). No audio files: a short lowpassed triangle pluck with a
+// randomised pitch so a run of beads sounds organic, not machine-gun. Rate-capped
+// so a fast drag becomes a pleasant tok-tok-tok, not a buzz.
+let _actx = null
+let _noise = null
+let _lastTick = 0
+function playBeadTick(kind = 'place') {
+  const now = performance.now()
+  if (now - _lastTick < 26) return
+  _lastTick = now
+  try {
+    if (!_actx) _actx = new (window.AudioContext || window.webkitAudioContext)()
+    if (_actx.state === 'suspended') _actx.resume()
+    const ctx = _actx
+    const t = ctx.currentTime
+    // Wood-block synthesis: a bandpassed noise "knock" (the woody attack) + a
+    // short lowpassed sine "body" for warmth, both with a fast knock decay.
+    if (!_noise) {
+      const len = Math.floor(ctx.sampleRate * 0.05)
+      _noise = ctx.createBuffer(1, len, ctx.sampleRate)
+      const d = _noise.getChannelData(0)
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1
+    }
+    const peak = kind === 'erase' ? 0.05 : 0.07
+    // knock (noise through a resonant bandpass)
+    const src = ctx.createBufferSource()
+    src.buffer = _noise
+    const bp = ctx.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.frequency.value = (kind === 'erase' ? 620 : 980) + Math.random() * 260
+    bp.Q.value = 7
+    const ng = ctx.createGain()
+    ng.gain.setValueAtTime(0.0001, t)
+    ng.gain.exponentialRampToValueAtTime(peak, t + 0.002)
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.055)
+    src.connect(bp).connect(ng).connect(ctx.destination)
+    src.start(t)
+    src.stop(t + 0.07)
+    // body (low sine thump)
+    const bf = (kind === 'erase' ? 150 : 210) + Math.random() * 40
+    const osc = ctx.createOscillator()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(bf * 1.5, t)
+    osc.frequency.exponentialRampToValueAtTime(bf, t + 0.04)
+    const og = ctx.createGain()
+    og.gain.setValueAtTime(0.0001, t)
+    og.gain.exponentialRampToValueAtTime(peak * 0.7, t + 0.004)
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.07)
+    osc.connect(og).connect(ctx.destination)
+    osc.start(t)
+    osc.stop(t + 0.08)
+  } catch (e) {}
 }
 
 const STORAGE_KEY = 'beadwork3_palettes_v1'
@@ -220,10 +288,46 @@ export default function Home() {
   const [activeId, setActiveId] = useState(() => firstLayersRef.current.activeId)
   const [beads, setBeads] = useState(() => firstLayersRef.current.layers.find((l) => l.type === 'bead').beads)
   const [showLayers, setShowLayers] = useState(false)
-  const [layerDrag, setLayerDrag] = useState(null) // { id, dy } while dragging a layer row
+  const [layerDrag, setLayerDrag] = useState(null) // { id, dy } while dragging a layer/group row
+  // Layer GROUPS (Procreate folders, one level deep). The stack stays a FLAT
+  // array — a group is `{id, name, visible, locked, collapsed}` in `groups`,
+  // and member layers carry its id as `layer.groupId`. Members are always
+  // CONTIGUOUS in z-order (every op below preserves that), so a group renders,
+  // hides, locks, reorders and flattens as one block. The bg layer never joins.
+  const [groups, setGroups] = useState([])
+  const groupsRef = useRef(groups)
+  const setGroupsBoth = (gs) => { groupsRef.current = gs; setGroups(gs) }
+  const groupById = (id, gs) => (id ? (gs || groupsRef.current).find((g) => g.id === id) || null : null)
+  // effective flags: a layer counts as shown/locked through its group too
+  const layerShown = (l, gs) => l.visible && groupById(l.groupId, gs)?.visible !== false
+  const layerHeld = (l, gs) => l.locked || groupById(l.groupId, gs)?.locked === true
   const [showMenu, setShowMenu] = useState(false) // ☰ dropdown menu
   const [showDetails, setShowDetails] = useState(false) // Artwork Details modal
   const [showColor, setShowColor] = useState(false) // colour picker panel
+  // light / dark theme (persisted). Mutating themeState.active re-themes every
+  // ${T.x} in the styled-jsx; the state is only here to trigger the re-render.
+  const [theme, setThemeName] = useState(() => {
+    let t = 'dark'
+    try { t = localStorage.getItem('beadwork3_theme') || 'dark' } catch (e) {}
+    themeState.active = t
+    return t
+  })
+  const setTheme = (t) => {
+    themeState.active = t
+    setThemeName(t)
+    try { localStorage.setItem('beadwork3_theme', t) } catch (e) {}
+  }
+  // bead-click sound (persisted). A ref mirrors it so the paint hot-path can read
+  // the current value without re-creating the paint callback.
+  const [soundOn, setSoundOnState] = useState(() => {
+    try { return localStorage.getItem('beadwork3_sound') !== 'off' } catch (e) { return true }
+  })
+  const soundOnRef = useRef(soundOn)
+  soundOnRef.current = soundOn
+  const setSoundOn = (on) => {
+    setSoundOnState(on)
+    try { localStorage.setItem('beadwork3_sound', on ? 'on' : 'off') } catch (e) {}
+  }
   const [editName, setEditName] = useState(false) // artwork name in edit mode
   const [exportPick, setExportPick] = useState(null) // Set of artwork ids to export, or null (picker closed)
   const [editPaletteId, setEditPaletteId] = useState(null) // palette being edited (swatch removal)
@@ -363,7 +467,7 @@ export default function Home() {
   // bead Maps are immutable (replaced on change), so a snapshot just shares the
   // unchanged Map references — cheap, like the single-Map snapshots before.
   // currentDoc reads the LIVE refs (never stale React state).
-  const currentDoc = () => ({ layers: layersRef.current, activeId: activeIdRef.current })
+  const currentDoc = () => ({ layers: layersRef.current, activeId: activeIdRef.current, groups: groupsRef.current })
   const docBeads = (doc) => {
     let t = 0
     for (const l of doc.layers) t += l.beads.size
@@ -373,6 +477,7 @@ export default function Home() {
   // Restore a document snapshot into both the live refs and React state.
   const applyDoc = (doc) => {
     layersRef.current = doc.layers
+    setGroupsBoth(doc.groups || [])
     const active = doc.layers.find((l) => l.id === doc.activeId) || doc.layers[0]
     activeIdRef.current = active ? active.id : null
     beadsRef.current = active ? active.beads : new Map()
@@ -464,6 +569,7 @@ export default function Home() {
     pushHistory(currentDoc())
     const l = makeLayer(nextLayerName())
     const idx = layersRef.current.findIndex((x) => x.id === activeIdRef.current)
+    l.groupId = layersRef.current[idx]?.groupId // inside the active layer's group (contiguous: goes right above it)
     const nl = [...layersRef.current]
     nl.splice(idx + 1, 0, l) // insert just above the active layer
     layersRef.current = nl
@@ -481,6 +587,7 @@ export default function Home() {
     const copy = src.type === 'image'
       ? { ...makeImageLayer(src.src, src.img, { ...src.t }, src.opacity), name: `${src.name} copy`, visible: src.visible }
       : { ...makeLayer(`${src.name} copy`, new Map(src.beads)), visible: src.visible, locked: src.locked, alphaLock: src.alphaLock }
+    copy.groupId = src.groupId // a copy stays in its source's group (adjacent → contiguous)
     const nl = [...layersRef.current]
     nl.splice(idx + 1, 0, copy)
     layersRef.current = nl
@@ -502,6 +609,7 @@ export default function Home() {
     const nl = layersRef.current.filter((l) => l.id !== id)
     layersRef.current = nl
     setLayers(nl)
+    dropEmptyGroups(nl)
     if (adjustIdRef.current === id) setAdjustId(null)
     if (activeIdRef.current === id) {
       const fallback = [...nl].reverse().find((l) => l.type === 'bead') || nl[nl.length - 1]
@@ -528,37 +636,103 @@ export default function Home() {
     nl.splice(idx, 1)
     layersRef.current = nl
     setLayers(nl)
+    dropEmptyGroups(nl) // the upper layer may have been its group's last member
     makeActive(lowerMerged)
     setSelection(new Set())
     setPlacing(null)
   }
 
-  // dir +1 = move up toward the top, -1 = down toward the bottom. The bg layer
-  // is pinned to the bottom (index 0) and nothing may move below it.
-  const moveLayer = (id, dir) => {
-    const idx = layersRef.current.findIndex((l) => l.id === id)
-    if (layersRef.current[idx]?.type === 'bg') return // bg never moves
-    const j = idx + dir
-    if (j < 1 || j >= layersRef.current.length) return // index 0 stays the bg layer
-    pushHistory(currentDoc())
-    const nl = [...layersRef.current]
-    const [m] = nl.splice(idx, 1)
-    nl.splice(j, 0, m)
-    layersRef.current = nl
-    setLayers(nl)
+  // ---- panel display rows + drag-reorder -----------------------------------
+  // The panel shows the stack top-first as ROWS: a group contributes a header
+  // row above its topmost member; a collapsed group hides its member rows (the
+  // header carries `count` so drag index math still accounts for them).
+  const displayRows = () => {
+    const arr = layersRef.current // bottom→top
+    const rows = []
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const l = arr[i]
+      if (l.groupId) {
+        const g = groupById(l.groupId)
+        if (arr[i + 1]?.groupId !== l.groupId) {
+          let n = 0
+          for (let j = i; j >= 0 && arr[j].groupId === l.groupId; j--) n++
+          rows.push({ kind: 'group', g, count: n })
+        }
+        if (!g?.collapsed) rows.push({ kind: 'layer', l })
+      } else rows.push({ kind: 'layer', l })
+    }
+    return rows
+  }
+  // Layers represented visually BELOW slot s of `rows` = the array index to
+  // splice at (the stack array runs bottom→top). Collapsed headers stand in
+  // for their hidden member rows.
+  const layersBelowSlot = (rows, s) => {
+    let n = 0
+    for (let i = s; i < rows.length; i++) {
+      const r = rows[i]
+      n += r.kind === 'layer' ? 1 : r.g?.collapsed ? r.count : 0
+    }
+    return n
+  }
+  // Is slot s inside a group's span (between its header/members)? → that group's id.
+  const slotGroup = (rows, s) => {
+    const above = rows[s - 1]
+    const below = rows[s]
+    if (above?.kind === 'group' && !above.g?.collapsed && below?.kind === 'layer' && below.l.groupId === above.g?.id)
+      return above.g.id
+    if (above?.kind === 'layer' && above.l.groupId && below?.kind === 'layer' && below.l.groupId === above.l.groupId)
+      return above.l.groupId
+    return null
+  }
+  const clampAboveBg = (rows, s) => {
+    const bgRow = rows.findIndex((r) => r.kind === 'layer' && r.l.type === 'bg')
+    return bgRow >= 0 ? Math.min(s, bgRow) : s
   }
 
-  // Hold-and-drag reorder: move a layer to an absolute stack index, clamped so the
-  // background stays pinned at index 0 (nothing may sit below it).
-  const reorderLayer = (id, toIndex) => {
-    const nl = [...layersRef.current]
-    const idx = nl.findIndex((l) => l.id === id)
-    if (idx < 0 || nl[idx].type === 'bg') return
-    const clamped = Math.max(1, Math.min(nl.length - 1, toIndex))
-    if (clamped === idx) return
+  // Drop a dragged LAYER row `steps` display-rows down (negative = up): the
+  // landing slot sets both z-order AND group membership — dropping between a
+  // group's rows joins that group, dropping outside leaves it (Procreate's
+  // drag-into-folder).
+  const dropLayerAt = (id, steps) => {
+    const arr = layersRef.current
+    const idx = arr.findIndex((l) => l.id === id)
+    const me = arr[idx]
+    if (!me || me.type === 'bg') return
+    const all = displayRows()
+    const from = all.findIndex((r) => r.kind === 'layer' && r.l.id === id)
+    if (from < 0) return // hidden inside a collapsed group — no row to drag
+    const rows = all.filter((r) => !(r.kind === 'layer' && r.l.id === id))
+    const s = clampAboveBg(rows, Math.max(0, Math.min(rows.length, from + steps)))
+    const gid = slotGroup(rows, s) || undefined
+    const at = layersBelowSlot(rows, s)
+    if (at === idx && gid === me.groupId) return
     pushHistory(currentDoc())
-    const [m] = nl.splice(idx, 1)
-    nl.splice(clamped, 0, m)
+    const nl = arr.filter((l) => l.id !== id)
+    nl.splice(at, 0, gid === me.groupId ? me : { ...me, groupId: gid })
+    layersRef.current = nl
+    setLayers(nl)
+    dropEmptyGroups(nl)
+    requestRedraw()
+  }
+
+  // Drop a dragged GROUP header: the whole member block moves as ONE unit.
+  // Groups don't nest, so a slot inside another group snaps upward out of it.
+  const dropGroupAt = (gid, steps) => {
+    const arr = layersRef.current
+    const all = displayRows()
+    const from = all.findIndex((r) => r.kind === 'group' && r.g?.id === gid)
+    if (from < 0) return
+    const rows = all.filter((r) => !(r.kind === 'group' && r.g?.id === gid) && !(r.kind === 'layer' && r.l.groupId === gid))
+    let s = Math.max(0, Math.min(rows.length, from + steps))
+    while (s > 0 && slotGroup(rows, s)) s--
+    s = clampAboveBg(rows, s)
+    const at = layersBelowSlot(rows, s)
+    const block = arr.filter((l) => l.groupId === gid)
+    const firstIdx = arr.findIndex((l) => l.groupId === gid)
+    if (!block.length || at === firstIdx) return
+    pushHistory(currentDoc())
+    const nl = arr.filter((l) => l.groupId !== gid)
+    nl.splice(at, 0, ...block)
     layersRef.current = nl
     setLayers(nl)
     requestRedraw()
@@ -586,10 +760,89 @@ export default function Home() {
     setLayers(nl)
   }
 
+  // ---- group operations ------------------------------------------------------
+  // Same undo policy as layers: structural changes (group/ungroup/flatten) are
+  // one undo step; metadata (hide/lock/rename/collapse) is not undoable.
+  const dropEmptyGroups = (nl) => {
+    const used = new Set(nl.map((l) => l.groupId).filter(Boolean))
+    if (groupsRef.current.some((g) => !used.has(g.id)))
+      setGroupsBoth(groupsRef.current.filter((g) => used.has(g.id)))
+  }
+  const nextGroupName = () => {
+    const nums = groupsRef.current.map((g) => /^Group (\d+)$/.exec(g.name)?.[1]).filter(Boolean).map(Number)
+    return `Group ${(nums.length ? Math.max(...nums) : 0) + 1}`
+  }
+  // "Group" on an ungrouped active layer wraps it + the layer directly below
+  // into a new group (or joins the group directly below — stays contiguous
+  // because the active layer sits right above that group's top member).
+  // On a grouped active layer the same button UNGROUPS (dissolves the wrapper;
+  // the member layers stay where they are).
+  const groupActiveLayer = () => {
+    const arr = layersRef.current
+    const idx = arr.findIndex((l) => l.id === activeIdRef.current)
+    const me = arr[idx]
+    if (!me || me.type === 'bg') return
+    if (me.groupId) {
+      pushHistory(currentDoc())
+      const gid = me.groupId
+      const nl = arr.map((l) => (l.groupId === gid ? { ...l, groupId: undefined } : l))
+      layersRef.current = nl
+      setLayers(nl)
+      setGroupsBoth(groupsRef.current.filter((g) => g.id !== gid))
+      return
+    }
+    const below = arr[idx - 1]
+    if (!below || below.type === 'bg') { showToast('No layer below to group with'); return }
+    pushHistory(currentDoc())
+    let gid = below.groupId
+    if (!gid) {
+      const g = { id: uid(), name: nextGroupName(), visible: true, locked: false, collapsed: false }
+      setGroupsBoth([...groupsRef.current, g])
+      gid = g.id
+    }
+    const nl = arr.map((l) => (l.id === me.id || (l.id === below.id && !below.groupId) ? { ...l, groupId: gid } : l))
+    layersRef.current = nl
+    setLayers(nl)
+  }
+  const renameGroup = (id, name) =>
+    setGroupsBoth(groupsRef.current.map((g) => (g.id === id ? { ...g, name } : g)))
+  const toggleGroupCollapsed = (id) =>
+    setGroupsBoth(groupsRef.current.map((g) => (g.id === id ? { ...g, collapsed: !g.collapsed } : g)))
+  const toggleGroupVisible = (id) => {
+    setGroupsBoth(groupsRef.current.map((g) => (g.id === id ? { ...g, visible: !g.visible } : g)))
+    requestRedraw()
+  }
+  const toggleGroupLock = (id) =>
+    setGroupsBoth(groupsRef.current.map((g) => (g.id === id ? { ...g, locked: !g.locked } : g)))
+  // Flatten: merge the group's bead members (top-wins) into ONE layer named
+  // after the group, sitting where the group's bottom member was. Image
+  // members can't merge into beads, so they block the flatten.
+  const flattenGroup = (id) => {
+    const arr = layersRef.current
+    const members = arr.filter((l) => l.groupId === id)
+    if (!members.length) return
+    if (members.some((l) => l.type !== 'bead')) { showToast('Move image layers out to flatten this group'); return }
+    pushHistory(currentDoc())
+    const merged = new Map()
+    for (const l of members) for (const [k, v] of l.beads) merged.set(k, v) // bottom→top: upper writes win
+    const g = groupById(id)
+    const flat = makeLayer(g?.name || 'Group', merged)
+    const at = arr.findIndex((l) => l.groupId === id) // bottom member's slot
+    const nl = arr.filter((l) => l.groupId !== id)
+    nl.splice(at, 0, flat)
+    layersRef.current = nl
+    setLayers(nl)
+    setGroupsBoth(groupsRef.current.filter((x) => x.id !== id))
+    makeActive(flat)
+    setSelection(new Set())
+    setPlacing(null)
+    requestRedraw()
+  }
+
   const activeLayer = layers.find((l) => l.id === activeId) || null
-  // A bead layer can be drawn on only when it's visible, unlocked, and not an
-  // image/background layer (those hold no bead Map to paint into).
-  const canEdit = !!activeLayer && activeLayer.visible && !activeLayer.locked &&
+  // A bead layer can be drawn on only when it's visible, unlocked (itself AND
+  // through its group), and not an image/background layer.
+  const canEdit = !!activeLayer && layerShown(activeLayer, groups) && !layerHeld(activeLayer, groups) &&
     activeLayer.type !== 'image' && activeLayer.type !== 'bg'
   canEditRef.current = canEdit
   // alpha lock: when on, drawing/fill may only RECOLOUR beads already on the
@@ -604,8 +857,10 @@ export default function Home() {
     if (l.type === 'bg') return 'Background layer — switch to a bead layer to draw'
     if (!l.visible) return 'Layer is hidden — show it to draw'
     if (l.locked) return 'Layer is locked — unlock it to draw'
+    if (groupById(l.groupId, groups)?.visible === false) return 'Group is hidden — show it to draw'
+    if (groupById(l.groupId, groups)?.locked) return 'Group is locked — unlock it to draw'
     return 'Can’t draw on this layer'
-  }, [activeLayer])
+  }, [activeLayer, groups])
   const blockedRef = useRef(blockedReason)
   blockedRef.current = blockedReason
 
@@ -784,33 +1039,35 @@ export default function Home() {
   const LAYER_ROW_H = 72
   // Layer-row gesture: quick tap = select; hold-and-drag = reorder the stack.
   // (Adding an image is the photo button in the Layers header — easier than a hold.)
-  const onLayerRowDown = (e, l) => {
+  // Shared hold-drag for panel rows: tap = onTap, drag = onDrop(steps) where
+  // steps counts DISPLAY rows moved (down positive).
+  const rowDrag = (e, dragId, onTap, onDrop) => {
     if (e.button != null && e.button !== 0) return
     const startY = e.clientY
-    const startIdx = layersRef.current.findIndex((x) => x.id === l.id)
     let moved = false
     const move = (ev) => {
       const dy = ev.clientY - startY
       if (!moved && Math.abs(dy) > 6) moved = true
-      if (moved) setLayerDrag({ id: l.id, dy })
+      if (moved) setLayerDrag({ id: dragId, dy })
     }
     const up = (ev) => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       window.removeEventListener('pointercancel', up)
       if (moved) {
-        // dragging DOWN the visual list moves the layer DOWN the stack (lower index)
         const steps = Math.round((ev.clientY - startY) / LAYER_ROW_H)
-        if (steps) reorderLayer(l.id, startIdx - steps)
+        if (steps) onDrop(steps)
         setLayerDrag(null)
-      } else {
-        switchLayer(l.id)
-      }
+      } else onTap()
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
     window.addEventListener('pointercancel', up)
   }
+  const onLayerRowDown = (e, l) =>
+    rowDrag(e, l.id, () => switchLayer(l.id), (steps) => dropLayerAt(l.id, steps))
+  const onGroupRowDown = (e, g) =>
+    rowDrag(e, `g:${g.id}`, () => toggleGroupCollapsed(g.id), (steps) => dropGroupAt(g.id, steps))
 
   // ---- printed-chart settings ----
   const [printBeadMm, setPrintBeadMm] = useState(8) // fixed bead size on paper (mm)
@@ -859,6 +1116,42 @@ export default function Home() {
   const activePalette =
     savedPalettes.find((p) => p.id === activePaletteId) || savedPalettes[0] || { id: null, name: '', colors: [] }
 
+  // ---- universal bead library (device-local, IndexedDB `meta`) -------------
+  // The catalog of real bead colours the studio stocks — shared by ALL
+  // artworks, unlike palettes which are made per artwork. Curated from the
+  // gallery ("Bead library"); the editor's colour panel offers it as a picker
+  // strip, and any custom colour can be added to it so the catalog grows from
+  // real use. Entries: { id, color, name } (name optional — hex shown if empty).
+  const [beadLib, setBeadLib] = useState([])
+  const [showLibrary, setShowLibrary] = useState(false)
+  const [libDraft, setLibDraft] = useState({ color: '#7BA23F', name: '' })
+  useEffect(() => {
+    getMeta('beadLibrary')
+      .then((v) => {
+        if (v && v.length) setBeadLib(v)
+        else {
+          const seed = DEFAULT_PALETTE.map((c) => ({ id: newPaletteId(), color: c, name: '' }))
+          setBeadLib(seed)
+          return setMeta('beadLibrary', seed)
+        }
+      })
+      .catch(() => {}) // no IndexedDB (private mode): library just stays empty
+  }, [])
+  const persistLibrary = (list) => {
+    setBeadLib(list)
+    setMeta('beadLibrary', list).catch(() => {})
+  }
+  const inLibrary = (c) => beadLib.some((b) => b.color.toLowerCase() === c.toLowerCase())
+  // editor affordance: current colour → library (guarded so double-taps can't dupe)
+  const addCurrentToLibrary = () => { if (!inLibrary(color)) persistLibrary([...beadLib, { id: newPaletteId(), color, name: '' }]) }
+  // library screen add: duplicates allowed on purpose (same hex, different bead finish)
+  const addLibDraft = () => {
+    persistLibrary([...beadLib, { id: newPaletteId(), color: libDraft.color, name: libDraft.name.trim() }])
+    setLibDraft((d) => ({ ...d, name: '' }))
+  }
+  const updateLibColor = (id, patch) => persistLibrary(beadLib.map((b) => (b.id === id ? { ...b, ...patch } : b)))
+  const removeLibColor = (id) => persistLibrary(beadLib.filter((b) => b.id !== id))
+
   // ---- mutate beads ----
   const floodFill = useCallback(
     (cell, useColor = color) => {
@@ -887,6 +1180,7 @@ export default function Home() {
         }
         return next
       })
+      if (soundOnRef.current) playBeadTick('place')
     },
     [color, cols, rows, commit, tech]
   )
@@ -946,13 +1240,16 @@ export default function Home() {
           if (map.get(k) === color) continue
           if (alpha && !map.has(k)) continue // only recolour existing beads
           if (map === strokeBase.current) { map = new Map(map); beadsRef.current = map }
+          const existed = map.has(k)
           map.set(k, color); changed = true
           if (fastStrokeRef.current) strokePaintedRef.current.add(k)
+          if (!existed && spawnPopRef.current) spawnPopRef.current(col, row, color) // pop only truly new beads
         }
       }
       if (changed) {
         patternBaseRef.current = null // any normal edit ends pattern layout-swapping
         requestRedraw() // silent: strokes repaint via rAF, no React render per event
+        if (soundOnRef.current) playBeadTick(mode === 'erase' ? 'erase' : 'place')
       }
     },
     [brushCells, color, requestRedraw]
@@ -1272,6 +1569,11 @@ export default function Home() {
   // ---- canvas drawing ----
   const canvasRef = useRef(null)
   const overlayRef = useRef(null) // hover-ghost canvas, stacked over canvasRef
+  const popRef = useRef(null) // transient bead-pop FX canvas (always present, DPR 1)
+  const poppingRef = useRef([]) // [{ col, row, color, t0 }] beads currently popping in
+  const popRafRef = useRef(0)
+  const popDrawRef = useRef(null) // latest drawPops (assigned every render)
+  const spawnPopRef = useRef(null) // latest spawnPop (so the paint hot-path can call it)
   const wrapRef = useRef(null)
   // Fast draw-stroke rendering: instead of re-rendering the whole (up to 10k-bead)
   // grid on every frame of a stroke — the allocation churn that crashed iPad
@@ -1559,7 +1861,7 @@ export default function Home() {
       // (live, so silent stroke repaints show); others read their own Maps.
       // `beads` stays in the deps so committed active-layer edits trigger redraw.
       const liveBeads = beadsRef.current
-      const visLayers = layers.filter((l) => l.visible)
+      const visLayers = layers.filter((l) => layerShown(l, groups)) // layer AND its group visible
       const aId = activeId
       const beadMapOf = (lay) => (lay.id === aId ? liveBeads : lay.beads)
       const imageShowing = visLayers.some((l) => l.type === 'image' && l.img)
@@ -1583,6 +1885,32 @@ export default function Home() {
       // key per cell in the hot loop. Populated as we draw the beads below.
       const filledCells = new Set()
       const cellId = (col, row) => row * cols + col
+
+      // Coverage rects: fill the whole cell so a zoomed-out design reads as a
+      // clean solid image, not dots. Apex/even rows are half-density on the
+      // staggered weave (tech.apexWide) → double-wide; aligned grids never are.
+      const apexWide = !!tech.apexWide
+      const rectCell = (p, cx, cy, col, row) => {
+        const wide = apexWide && row % 2 === 0
+        p.rect(cx - (wide ? geo.Px : geo.Px / 2), cy - geo.Py / 2, wide ? geo.Px * 2 : geo.Px, geo.Py)
+      }
+      // Carve rects (texture overlay on): colour shows ONLY through the tile's
+      // punched bead holes, so each bead's rect need cover just its OWN
+      // silhouette — the rotated silhouette's bounding box. Full-cell rects
+      // leaked here: a double-wide apex rect sat under an EMPTY neighbour's
+      // punched hole and showed a phantom half-bead at shape edges (the
+      // mid-zoom "colour bleeding" bug).
+      const bboxHalf = new Map() // tilt → [halfW, halfH] (few distinct tilts)
+      const carveCell = (p, cx, cy, col, row) => {
+        const t = tiltFor(col, row)
+        let hh = bboxHalf.get(t)
+        if (!hh) {
+          const c = Math.abs(Math.cos(t)), s = Math.abs(Math.sin(t))
+          bboxHalf.set(t, (hh = [(dw * c + dh * s) / 2, (dw * s + dh * c) / 2]))
+        }
+        p.rect(cx - hh[0], cy - hh[1], hh[0] * 2, hh[1] * 2)
+      }
+      const paintCell = texActive ? carveCell : rectCell
 
       for (const lay of visLayers) {
         if (lay.type === 'bg') continue // already painted as the base
@@ -1612,10 +1940,6 @@ export default function Home() {
           if (!p) { p = new Path2D(); byColor.set(fill, p) }
           return p
         }
-        // fill the whole cell (apex/even rows are half-density → double-wide) so a
-        // zoomed-out design reads as a clean solid image, not dots
-        const rectCell = (p, cx, cy, row) =>
-          p.rect(cx - (row % 2 === 0 ? geo.Px : geo.Px / 2), cy - geo.Py / 2, row % 2 === 0 ? geo.Px * 2 : geo.Px, geo.Py)
         if (onScreenBw < 6) {
           // beads tiny on screen → fast rects, straight from the Map (no per-bead
           // array), so even a fully-packed huge canvas stays cheap
@@ -1628,7 +1952,7 @@ export default function Home() {
             filledCells.add(cellId(col, row))
             if (texActive) growBounds(col, row)
             const { cx, cy } = geo.centerFor(col, row)
-            rectCell(pathFor(fill), cx, cy, row)
+            paintCell(pathFor(fill), cx, cy, col, row)
           }
         } else {
           // beads big enough to show the woven shape: collect the visible ones
@@ -1651,7 +1975,7 @@ export default function Home() {
             const col = vis[i], row = vis[i + 1], fill = vis[i + 2]
             const { cx, cy } = geo.centerFor(col, row)
             const p = pathFor(fill)
-            if (asRect) rectCell(p, cx, cy, row)
+            if (asRect) paintCell(p, cx, cy, col, row)
             else tech.beadOutline(p, cx, cy, dw, dh, tiltFor(col, row))
           }
         }
@@ -1810,7 +2134,7 @@ export default function Home() {
         ctx.restore()
       }
     },
-    [viewport, view, geo, beads, layers, activeId, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing, mirrorGhosts, tech, canvasCm, beadTexture]
+    [viewport, view, geo, beads, layers, groups, activeId, Bw, Bh, cols, rows, tiltFor, checkerTile, DPR, selection, marquee, pack, placing, mirrorGhosts, tech, canvasCm, beadTexture]
   )
 
   // Fast stroke repaint: blit the scene snapshot taken at stroke start, then draw
@@ -1882,8 +2206,8 @@ export default function Home() {
         const c = +k.slice(0, ci)
         const r = +k.slice(ci + 1)
         const { cx, cy } = geo.centerFor(c, r)
-        const even = r % 2 === 0
-        clip.rect(cx - (even ? geo.Px : geo.Px / 2), cy - geo.Py / 2, even ? geo.Px * 2 : geo.Px, geo.Py)
+        const wide = !!tech.apexWide && r % 2 === 0 // half-density apex rows only
+        clip.rect(cx - (wide ? geo.Px : geo.Px / 2), cy - geo.Py / 2, wide ? geo.Px * 2 : geo.Px, geo.Py)
       }
       ctx.save()
       ctx.clip(clip)
@@ -1891,7 +2215,7 @@ export default function Home() {
       ctx.drawImage(floor, 0, 0)
       ctx.restore()
     },
-    [view, DPR, geo]
+    [view, DPR, geo, tech]
   )
   // ---- fast zoom/pan: blit the last full render, transformed, during a gesture -
   // A full drawScene on a big canvas re-iterates every placed bead (~100ms on a
@@ -1983,7 +2307,72 @@ export default function Home() {
   )
   overlayDrawRef.current = drawOverlay
 
-  // size both canvases to the viewport (never to the document)
+  // Bead-pop FX: a quick overshoot (scale 1 → ~1.22 → 1) faded over each newly
+  // placed bead, on a cheap always-present DPR-1 canvas. It never touches the heavy
+  // main render or the fast-stroke path. The underlying bead is already full size,
+  // so the sub-1× part of the curve hides inside it (no visible shrink) — only the
+  // overshoot bloom reads, giving a satisfying "snap into place".
+  const POP_MS = 150
+  const drawPops = useCallback(
+    (ctx, now) => {
+      const { w: vw, h: vh } = viewport
+      const { scale, tx, ty, rot } = view
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, vw, vh)
+      const list = poppingRef.current
+      if (!list.length) return
+      const vcos = Math.cos(rot)
+      const vsin = Math.sin(rot)
+      ctx.setTransform(scale * vcos, scale * vsin, -scale * vsin, scale * vcos, tx, ty)
+      const baseScale = 1 + pack * (PACKED_DRAW - 1)
+      let alive = 0
+      for (const p of list) {
+        const a = (now - p.t0) / POP_MS
+        if (a >= 1 || a < 0) continue
+        list[alive++] = p // compact survivors in place
+        const s = baseScale * (1 + 0.22 * Math.sin(Math.PI * a))
+        const { cx, cy } = geo.centerFor(p.col, p.row)
+        ctx.globalAlpha = 0.8 * (1 - a)
+        ctx.fillStyle = p.color
+        tech.beadPath(ctx, cx, cy, Bw * s, Bh * s, tiltFor(p.col, p.row))
+        ctx.fill()
+      }
+      list.length = alive
+      ctx.globalAlpha = 1
+    },
+    [viewport, view, pack, geo, tech, Bw, Bh, tiltFor]
+  )
+  popDrawRef.current = drawPops
+
+  const popTick = useCallback(() => {
+    const canvas = popRef.current
+    if (canvas && popDrawRef.current) popDrawRef.current(canvas.getContext('2d'), performance.now())
+    if (poppingRef.current.length) {
+      popRafRef.current = requestAnimationFrame(popTick)
+    } else {
+      popRafRef.current = 0
+      if (canvas) {
+        const c = canvas.getContext('2d')
+        c.setTransform(1, 0, 0, 1, 0, 0)
+        c.clearRect(0, 0, canvas.width, canvas.height)
+      }
+    }
+  }, [])
+
+  const spawnPop = useCallback(
+    (col, row, color) => {
+      const list = poppingRef.current
+      if (list.length > 80) list.shift() // bound work on dense fast strokes
+      list.push({ col, row, color, t0: performance.now() })
+      if (!popRafRef.current) popRafRef.current = requestAnimationFrame(popTick)
+    },
+    [popTick]
+  )
+  spawnPopRef.current = spawnPop
+  useEffect(() => () => { if (popRafRef.current) cancelAnimationFrame(popRafRef.current) }, [])
+
+  // size all canvases to the viewport (never to the document). The board + hover
+  // ghost run at DPR for crispness; the pop FX runs at DPR 1 to stay light.
   useEffect(() => {
     for (const canvas of [canvasRef.current, overlayRef.current]) {
       if (!canvas) continue
@@ -1991,6 +2380,13 @@ export default function Home() {
       canvas.height = Math.max(1, Math.round(viewport.h * DPR))
       canvas.style.width = `${viewport.w}px`
       canvas.style.height = `${viewport.h}px`
+    }
+    const pop = popRef.current
+    if (pop) {
+      pop.width = Math.max(1, Math.round(viewport.w))
+      pop.height = Math.max(1, Math.round(viewport.h))
+      pop.style.width = `${viewport.w}px`
+      pop.style.height = `${viewport.h}px`
     }
   }, [viewport, DPR])
 
@@ -2131,6 +2527,65 @@ export default function Home() {
   const SNAP_BEADS = 3
   const strokeRef = useRef(null) // { start, pts, locked, snapped } per stroke
 
+  // ---- QuickShape (hold-to-snap, Procreate) --------------------------------
+  // Hold the pen still ~HOLD_MS mid-draw → the freehand path snaps to the
+  // fitted ideal shape (line / circle / ellipse / rect / triangle / polygon),
+  // repainted as a brush-thick OUTLINE through the same stroke-replay the
+  // straight-line snap uses (so undo/commit/alpha-lock all behave the same).
+  // Keep dragging to adjust the shape; lift to place — one undo step.
+  const HOLD_MS = 600
+  const HOLD_JITTER = 7 // screen px of pen wobble that still counts as "still"
+  const shapeHoldRef = useRef(null) // {sx, sy, timer} pending hold detection
+  const shapeModeRef = useRef(null) // {shape, cur, anchor} adjust phase after snap
+  const shapeRafRef = useRef(0) // one shape repaint per frame while adjusting
+  const tryQuickShapeRef = useRef(null) // latest closure for the hold timer
+
+  const cancelShapeHold = () => {
+    if (shapeHoldRef.current) {
+      clearTimeout(shapeHoldRef.current.timer)
+      shapeHoldRef.current = null
+    }
+  }
+  const armShapeHold = (sx, sy) => {
+    cancelShapeHold()
+    shapeHoldRef.current = { sx, sy, timer: setTimeout(() => tryQuickShapeRef.current?.(), HOLD_MS) }
+  }
+  const shapeStep = () => Math.min(geo.Px, geo.Py) / 4 // dense enough to hit every bead
+  // Rebuild the design as (stroke-start state) + the shape outline. Unlike
+  // paintAlong, samples snap to the NEAREST bead (no oval hit-test): an ideal
+  // curve slips between the staggered lattice's ovals (vertical runs
+  // especially), which left dashed outlines. QuickShape is draw-only.
+  const paintShapeOutline = (base, points) => {
+    const alpha = alphaLockRef.current
+    const next = new Map(base)
+    const put = (col, row) => {
+      const k = key(col, row)
+      if (alpha && !next.has(k)) return // alpha lock: only recolour existing beads
+      next.set(k, color)
+    }
+    for (const q of points) {
+      if (brush > 1) for (const c of brushCells(q.x, q.y)) put(c.col, c.row)
+      else {
+        const n = tech.nearestBead(geo, q.x, q.y)
+        if (n) put(n.col, n.row)
+      }
+    }
+    return next
+  }
+  const tryQuickShape = () => {
+    const s = strokeRef.current
+    if (!s || !dragging.current || tool !== 'draw' || shapeModeRef.current) return
+    const shape = fitShape(s.pts, geo.Px * 2.5)
+    if (!shape) return
+    shapeModeRef.current = { shape, cur: shape, anchor: s.pts[s.pts.length - 1] }
+    s.locked = true // stop the straight-line snap evaluating this stroke
+    s.snapped = false
+    fastStrokeRef.current = false // outline replay replaces the map → full redraws
+    applyBeads(paintShapeOutline(strokeBase.current, shapeOutline(shape, shapeStep())), true)
+    showToast(`${shapeLabel(shape)} — drag to adjust, lift to place`)
+  }
+  tryQuickShapeRef.current = tryQuickShape
+
   // unit vectors of the technique's straight lattice lines + their bead pitch
   const snapAxes = () => tech.snapAxes(geo)
 
@@ -2195,12 +2650,16 @@ export default function Home() {
 
   const handleStrokePoint = (p) => {
     const s = strokeRef.current
+    // Record the draw path even after the line-snap gives up (`locked`) — the
+    // QuickShape hold needs the WHOLE freehand path to fit a shape against.
+    // Thinned: pencils fire up to 240 events/s.
+    if (s && tool !== 'erase') {
+      const last = s.pts[s.pts.length - 1]
+      if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 1) s.pts.push(p)
+    }
     // straight-line snap is a DRAW assist; skip it for erase (it copies the whole
     // bead Map per sample — churn — and bypasses the fast-erase path).
     if (s && !s.locked && tool !== 'erase') {
-      // thin the recorded path: pencils fire up to 240 events/s
-      const last = s.pts[s.pts.length - 1]
-      if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 1) s.pts.push(p)
       const snap = evalSnap(s, p)
       if (snap) {
         // throttle: rebuild the design only when the line gains/loses a sample,
@@ -2278,6 +2737,7 @@ export default function Home() {
     dragging.current = true
     strokeBase.current = beadsRef.current // history: snapshot at stroke start
     strokeRef.current = { start: p, pts: [], locked: false, snapped: false, lastN: -1 }
+    if (tool === 'draw') armShapeHold(e.clientX, e.clientY) // QuickShape hold timer
     // arm the fast-stroke path for a freehand DRAW on the top-most visible layer
     // (so stamping new beads over the snapshot can't paint over an upper layer).
     fastStrokeRef.current = false
@@ -2286,7 +2746,7 @@ export default function Home() {
       pushRecent(color)
       const li = layersRef.current
       const aIdx = li.findIndex((l) => l.id === activeIdRef.current)
-      const coveredAbove = li.some((l, i) => i > aIdx && l.visible)
+      const coveredAbove = li.some((l, i) => i > aIdx && layerShown(l))
       if (!coveredAbove && canvasRef.current) {
         const src = canvasRef.current
         let cache = strokeCacheRef.current
@@ -2400,6 +2860,26 @@ export default function Home() {
       return
     }
     if (dragging.current) {
+      // QuickShape: after a snap the drag ADJUSTS the shape instead of painting.
+      // Rebuilt at most once per frame (paintAlong copies the bead Map).
+      if (shapeModeRef.current) {
+        const m = shapeModeRef.current
+        m.cur = adjustShape(m.shape, m.anchor, docFromEvent(e))
+        if (!shapeRafRef.current) {
+          shapeRafRef.current = requestAnimationFrame(() => {
+            shapeRafRef.current = 0
+            const mm = shapeModeRef.current
+            if (!mm || !strokeBase.current) return
+            applyBeads(paintShapeOutline(strokeBase.current, shapeOutline(mm.cur, shapeStep())), true)
+          })
+        }
+        return
+      }
+      // real pen movement re-arms the hold timer; sub-jitter wobble lets it ripen
+      const h = shapeHoldRef.current
+      if (h && Math.hypot(e.clientX - h.sx, e.clientY - h.sy) > HOLD_JITTER) {
+        armShapeHold(e.clientX, e.clientY)
+      }
       handleStrokePoint(docFromEvent(e))
       return
     }
@@ -2443,6 +2923,10 @@ export default function Home() {
     dragging.current = false
     panning.current = null
     placeDrag.current = null
+    // QuickShape: lifting places the shape (committed above); drop the hold/adjust state
+    cancelShapeHold()
+    shapeModeRef.current = null
+    if (shapeRafRef.current) { cancelAnimationFrame(shapeRafRef.current); shapeRafRef.current = 0 }
     // end the fast-stroke path; the committed setBeads/setLayers above trigger a
     // full drawScene that reconciles the snapshot with the real scene
     fastStrokeRef.current = false
@@ -2605,7 +3089,7 @@ export default function Home() {
   const flattenVisible = () => {
     const m = new Map()
     for (const l of layersRef.current) {
-      if (!l.visible || l.type !== 'bead') continue
+      if (!layerShown(l) || l.type !== 'bead') continue // group-hidden layers stay out of the chart
       for (const [k, v] of l.beads) m.set(k, v)
     }
     return m
@@ -2617,7 +3101,7 @@ export default function Home() {
   const chartComposite = () => {
     const out = []
     for (const l of layersRef.current) {
-      if (!l.visible) continue
+      if (!layerShown(l)) continue
       if (l.type === 'bg') { if (exportBg === 'screen') out.push({ type: 'color', color: l.color }) }
       else if (l.type === 'image') { if (l.img) out.push({ type: 'image', img: l.img, t: l.t, opacity: l.opacity }) }
       else out.push({ type: 'beads', map: l.beads })
@@ -2717,9 +3201,11 @@ export default function Home() {
   // one design = one plain object: this is what every save path (quick-save,
   // named slot, exported file) writes and what applyDesign reads back
   const designData = () => ({
-    version: 3, name: designName, technique: techniqueId, canvasCm, beadMM, palette, pack,
+    version: 4, name: designName, technique: techniqueId, canvasCm, beadMM, palette, pack,
+    // v4: layer groups — saved with their ids so layers' groupId keeps pointing at them
+    groups: groupsRef.current.map(({ id, name, visible, locked, collapsed }) => ({ id, name, visible, locked, collapsed })),
     layers: layersRef.current.map((l) => {
-      const base = { name: l.name, type: l.type || 'bead', visible: l.visible, locked: l.locked, alphaLock: l.alphaLock }
+      const base = { name: l.name, type: l.type || 'bead', visible: l.visible, locked: l.locked, alphaLock: l.alphaLock, groupId: l.groupId }
       if (l.type === 'bg') return { ...base, color: l.color }
       if (l.type === 'image') return { ...base, src: l.src, t: l.t, opacity: l.opacity }
       return { ...base, beads: [...l.beads.entries()] }
@@ -2766,6 +3252,12 @@ export default function Home() {
     let nl = []
     const pendingImages = [] // [id, src] to load after layersRef is set
     const isV3 = Array.isArray(d.layers) && d.layers.some((l) => l.type)
+    // v4 groups: keep only well-formed entries; a layer's groupId must point at
+    // one of them (dangling ids are dropped below). Older saves have none.
+    const savedGroups = (Array.isArray(d.groups) ? d.groups : [])
+      .filter((g) => g && g.id)
+      .map((g) => ({ id: g.id, name: g.name || 'Group', visible: g.visible !== false, locked: !!g.locked, collapsed: !!g.collapsed }))
+    const groupIds = new Set(savedGroups.map((g) => g.id))
     if (isV3) {
       for (const l of d.layers) {
         if (l.type === 'bg') {
@@ -2775,11 +3267,13 @@ export default function Home() {
         } else if (l.type === 'image') {
           const lay = makeImageLayer(l.src || null, null, l.t || { x: 0, y: 0, scale: 1 }, l.opacity == null ? 1 : l.opacity)
           lay.name = l.name || 'Image'; lay.visible = l.visible !== false; lay.locked = !!l.locked
+          if (groupIds.has(l.groupId)) lay.groupId = l.groupId
           nl.push(lay)
           if (l.src) pendingImages.push([lay.id, l.src])
         } else {
           const lay = makeLayer(l.name || 'Layer', new Map(Array.isArray(l.beads) ? l.beads : []))
           lay.visible = l.visible !== false; lay.locked = !!l.locked; lay.alphaLock = !!l.alphaLock
+          if (groupIds.has(l.groupId)) lay.groupId = l.groupId
           nl.push(lay)
         }
       }
@@ -2827,6 +3321,9 @@ export default function Home() {
 
     if (undoable) pushHistory(currentDoc())
     layersRef.current = nl
+    // only groups that still have members (older saves load with none)
+    const usedGroupIds = new Set(nl.map((l) => l.groupId).filter(Boolean))
+    setGroupsBoth(savedGroups.filter((g) => usedGroupIds.has(g.id)))
     activeIdRef.current = active.id
     beadsRef.current = active.beads
     patternBaseRef.current = null
@@ -2860,6 +3357,7 @@ export default function Home() {
     const l = makeLayer('Layer 1')
     const stack = [makeBgLayer('#FFFFFF'), l] // bg colour floor + one bead layer
     layersRef.current = stack
+    setGroupsBoth([]) // fresh artwork starts with no layer groups
     activeIdRef.current = l.id
     beadsRef.current = l.beads
     patternBaseRef.current = null
@@ -3117,6 +3615,9 @@ export default function Home() {
           {/* hover ghost lives here so it repaints without redrawing the scene.
               Mouse-only: never allocated on touch screens (iPad memory). */}
           {canHover && <canvas ref={overlayRef} className="overlay" />}
+          {/* bead-pop FX: a light always-present canvas for the "snap into place"
+              overshoot; independent of the main render so it can't slow drawing. */}
+          <canvas ref={popRef} className="overlay popfx" />
           {/* ── two floating toolbar pills (Figma canvas screen) ── */}
           <div className="tbPill tbLeft">
             <button className="tbIcon" onClick={() => setScreen('gallery')} title="My artworks">
@@ -3217,10 +3718,7 @@ export default function Home() {
 
           {/* drawing-off banner when the active layer is locked or hidden */}
           {!canEdit && (
-            <div className="lockNote">
-              {activeLayer && !activeLayer.visible ? 'Active layer is hidden' : 'Active layer is locked'}
-              {' '}— drawing is off.
-            </div>
+            <div className="lockNote">{blockedReason()} </div>
           )}
 
           {/* selection tools — compact bottom bar (Figma 52:792) */}
@@ -3296,14 +3794,58 @@ export default function Home() {
                 />
               </div>
               <div className="lpList">
-                {/* top of the stack shows first (array is bottom→top). Tap = select,
-                    hold-drag = reorder, long-press = add an image onto the layer. */}
-                {[...layers].reverse().map((l) => {
+                {/* top of the stack shows first. Tap = select (layers) / collapse
+                    (groups), hold-drag = reorder — a layer dropped between a
+                    group's rows JOINS it; a group header drags its whole block. */}
+                {displayRows().map((row) => {
+                  if (row.kind === 'group') {
+                    const g = row.g
+                    if (!g) return null
+                    const gDragging = layerDrag?.id === `g:${g.id}`
+                    return (
+                      <div
+                        key={`g:${g.id}`}
+                        className={`lpRow lpGroupRow ${gDragging ? 'dragging' : ''}`}
+                        style={gDragging ? { transform: `translateY(${layerDrag.dy}px)` } : undefined}
+                        onPointerDown={(e) => onGroupRowDown(e, g)}
+                      >
+                        <span className={`lpChevron ${g.collapsed ? '' : 'open'}`}>▸</span>
+                        <span
+                          className="lpName"
+                          onDoubleClick={(e) => {
+                            e.stopPropagation()
+                            const n = window.prompt('Rename group:', g.name)
+                            if (n !== null && n.trim()) renameGroup(g.id, n.trim())
+                          }}
+                          title="Tap to open/close · double-tap to rename"
+                        >{g.name} <span className="lpGroupCount">({row.count})</span></span>
+                        <button
+                          className="lpEditBtn"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => { e.stopPropagation(); flattenGroup(g.id) }}
+                          title="Flatten the group into one layer"
+                        >Flatten</button>
+                        <button
+                          className="lpRowIcon"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => { e.stopPropagation(); toggleGroupLock(g.id) }}
+                          title={g.locked ? 'Unlock group' : 'Lock group'}
+                        >{g.locked ? <IconLock /> : <IconUnlock />}</button>
+                        <button
+                          className="lpRowIcon"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => { e.stopPropagation(); toggleGroupVisible(g.id) }}
+                          title={g.visible ? 'Hide group' : 'Show group'}
+                        >{g.visible ? <IconEye /> : <IconEyeOff />}</button>
+                      </div>
+                    )
+                  }
+                  const l = row.l
                   const dragging = layerDrag?.id === l.id
                   return (
                     <div
                       key={l.id}
-                      className={`lpRow ${l.id === activeId ? 'active' : ''} ${dragging ? 'dragging' : ''}`}
+                      className={`lpRow ${l.id === activeId ? 'active' : ''} ${dragging ? 'dragging' : ''} ${l.groupId ? 'inGroup' : ''}`}
                       style={dragging ? { transform: `translateY(${layerDrag.dy}px)` } : undefined}
                       onPointerDown={(e) => onLayerRowDown(e, l)}
                     >
@@ -3328,7 +3870,7 @@ export default function Home() {
                           className={`lpEditBtn ${l.id === adjustId ? 'on' : ''}`}
                           onPointerDown={(e) => e.stopPropagation()}
                           onClick={(e) => { e.stopPropagation(); switchLayer(l.id); setAdjustId(l.id === adjustId ? null : l.id) }}
-                          disabled={l.locked || !l.visible}
+                          disabled={layerHeld(l, groups) || !layerShown(l, groups)}
                           title={l.id === adjustId ? 'Done adjusting' : 'Adjust image'}
                         ><IconEdit /></button>
                       )}
@@ -3369,6 +3911,10 @@ export default function Home() {
                     <>
                       <button onClick={() => duplicateLayer(activeId)} disabled={t === 'bg'}>Duplicate</button>
                       <span className="lpBarDiv" />
+                      <button onClick={groupActiveLayer} disabled={t === 'bg'} title={activeLayer?.groupId ? 'Dissolve this layer’s group' : 'Group with the layer below'}>
+                        {activeLayer?.groupId ? 'Ungroup' : 'Group'}
+                      </button>
+                      <span className="lpBarDiv" />
                       <button className={activeLayer?.alphaLock ? 'on' : ''} onClick={() => toggleAlphaLock(activeId)} disabled={!isBead}>Alpha lock</button>
                       <span className="lpBarDiv" />
                       <button onClick={clearCanvas} disabled={!isBead}>Clear</button>
@@ -3406,6 +3952,13 @@ export default function Home() {
                 <button className="menuItem" onClick={() => { setShowMenu(false); exportJPG() }} disabled={exporting}>Export JPG</button>
                 <div className="menuDiv" />
                 <button className="menuItem" onClick={() => { setShowMenu(false); setShowDetails(true) }}>Artwork Details</button>
+                <div className="menuDiv" />
+                <button className="menuItem" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+                  {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+                </button>
+                <button className="menuItem" onClick={() => setSoundOn(!soundOn)}>
+                  {soundOn ? 'Bead sound: on' : 'Bead sound: off'}
+                </button>
               </div>
             </>
           )}
@@ -3483,7 +4036,26 @@ export default function Home() {
                   </>
                 )}
                 <div className="cpPalHead">
-                  <span className="cpLabel">Colour palettte</span>
+                  <span className="cpLabel">Bead library</span>
+                  {!inLibrary(color) && (
+                    <button className="cpNew" onClick={addCurrentToLibrary} title="Add the current colour to the bead library">+ Add current</button>
+                  )}
+                </div>
+                {beadLib.length > 0 && (
+                  <div className="cpBox">
+                    {beadLib.map((b) => (
+                      <button
+                        key={b.id}
+                        className={`cpSw ${b.color === color ? 'on' : ''}`}
+                        style={{ background: b.color }}
+                        onClick={() => setColor(b.color)}
+                        title={b.name || b.color}
+                      />
+                    ))}
+                  </div>
+                )}
+                <div className="cpPalHead">
+                  <span className="cpLabel">Colour palette</span>
                   <button className="cpNew" onClick={addPalette} title="New palette from the current colour">+ New</button>
                 </div>
                 <div className="cpPalList">
@@ -3560,7 +4132,10 @@ export default function Home() {
             <div className="gallery">
               <div className="galleryHead">
                 <div className="brand big">MY ARTWORKS<span className="dot" /><span className="buildTag">v{BUILD_ID}</span></div>
-                <button className="primary newBtn" onClick={() => setChooser(true)}>+ New artwork</button>
+                <div className="galleryHeadBtns">
+                  <button className="ghost" onClick={() => setShowLibrary(true)}>Bead library</button>
+                  <button className="primary newBtn" onClick={() => setChooser(true)}>+ New artwork</button>
+                </div>
               </div>
               {artworks.length === 0 ? (
                 <div className="galleryEmpty">No artworks yet.</div>
@@ -3597,6 +4172,59 @@ export default function Home() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Universal bead library — the studio's real bead colours, curated here
+          (gallery), pickable from the editor's colour panel in every artwork. */}
+      {showLibrary && (
+        <div className="modalScrim" onClick={() => setShowLibrary(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modalTitle">BEAD LIBRARY</div>
+            <div className="libHint">
+              All the bead colours you stock. Every artwork's palettes can pick from these.
+            </div>
+            <div className="pickList">
+              {beadLib.length === 0 && <div className="libEmpty">No colours yet — add your bead stock below.</div>}
+              {beadLib.map((b) => (
+                <div className="libRow" key={b.id}>
+                  <input
+                    type="color"
+                    className="libSw"
+                    value={b.color}
+                    onChange={(e) => updateLibColor(b.id, { color: e.target.value })}
+                    title="Edit colour"
+                  />
+                  <input
+                    className="libName"
+                    value={b.name}
+                    placeholder={b.color}
+                    onChange={(e) => updateLibColor(b.id, { name: e.target.value })}
+                    title="Name this bead colour"
+                  />
+                  <button className="libDel" onClick={() => removeLibColor(b.id)} title="Remove from library">×</button>
+                </div>
+              ))}
+            </div>
+            <div className="libRow libAddRow">
+              <input
+                type="color"
+                className="libSw"
+                value={libDraft.color}
+                onChange={(e) => setLibDraft((d) => ({ ...d, color: e.target.value }))}
+                title="New bead colour"
+              />
+              <input
+                className="libName"
+                value={libDraft.name}
+                placeholder="Name (optional)"
+                onChange={(e) => setLibDraft((d) => ({ ...d, name: e.target.value }))}
+                onKeyDown={(e) => { if (e.key === 'Enter') addLibDraft() }}
+              />
+              <button className="cpNew" onClick={addLibDraft}>+ Add</button>
+            </div>
+            <button className="primary" onClick={() => setShowLibrary(false)}>Done</button>
+          </div>
         </div>
       )}
 
@@ -3736,6 +4364,7 @@ export default function Home() {
           position: absolute; top: 0; left: 0;
           pointer-events: none; touch-action: none;
         }
+        .popfx { z-index: 1; } /* over the board, under all the floating chrome */
 
         /* ── two floating toolbar pills (Figma canvas screen) ── */
         .tbPill {
@@ -3765,8 +4394,8 @@ export default function Home() {
           justify-content: center; border: none; background: none;
           color: ${T.inkSoft}; border-radius: 10px; cursor: pointer; transition: all 0.12s;
         }
-        @media (hover: hover) { .tbIcon:hover { color: ${T.ink}; background: rgba(255,255,255,0.08); } }
-        .tbIcon.on { color: ${T.ink}; background: rgba(255,255,255,0.16); }
+        @media (hover: hover) { .tbIcon:hover { color: ${T.ink}; background: rgba(128,128,128,0.16); } }
+        .tbIcon.on { color: ${T.ink}; background: rgba(128,128,128,0.30); }
         .tbColor {
           position: relative; width: 30px; height: 30px; margin-left: 6px; padding: 0;
           border: 2px solid rgba(255,255,255,0.55); border-radius: 50%;
@@ -3834,7 +4463,7 @@ export default function Home() {
           border: none; background: ${T.panel}; color: ${T.inkSoft};
           border-radius: 10px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
         }
-        @media (hover: hover) { .undoRedo button:hover { color: ${T.ink}; background: #727270; } }
+        @media (hover: hover) { .undoRedo button:hover { color: ${T.ink}; background: ${T.hoverPill}; } }
 
         .zoomCtl {
           position: absolute; right: 14px; bottom: 14px;
@@ -3847,7 +4476,7 @@ export default function Home() {
           font-family: ${T.mono}; font-size: 15px; width: 40px; height: 40px;
           border-radius: 8px;
         }
-        @media (hover: hover) { .zoomCtl button:hover { background: #6f6f6d; } }
+        @media (hover: hover) { .zoomCtl button:hover { background: ${T.hoverPill}; } }
         .zoomCtl .zval { width: 56px; font-size: 12px; }
 
         /* image-adjust mode banner */
@@ -3882,7 +4511,7 @@ export default function Home() {
           border-radius: ${T.radius}px; padding: 6px 16px; font-family: ${T.mono};
           font-size: 15px; white-space: nowrap;
         }
-        .selChip:hover:not(:disabled) { background: #757570; }
+        .selChip:hover:not(:disabled) { background: ${T.hoverPill}; }
         .selChip:disabled { opacity: 0.4; cursor: not-allowed; }
 
         /* mirror preview: a ✓ centred on each of the 4 ghost copies */
@@ -3916,7 +4545,7 @@ export default function Home() {
         /* ── layers panel (Figma 52:685) ── */
         .layersPanel {
           position: absolute; right: 92px; top: 74px; bottom: 14px;
-          width: 340px; max-width: 76vw;
+          width: 420px; max-width: 76vw;
           display: flex; flex-direction: column; gap: 12px;
           background: ${T.bg}; border: 1px solid ${T.line};
           border-radius: ${T.radius}px; padding: 16px;
@@ -3942,10 +4571,10 @@ export default function Home() {
         .lpRow {
           flex-shrink: 0; display: flex; align-items: center; gap: 12px;
           height: 64px; padding: 0 14px 0 8px; border-radius: 8px; cursor: pointer;
-          background: ${T.panel}; touch-action: none; -webkit-touch-callout: none;
+          background: ${T.rowBg}; touch-action: none; -webkit-touch-callout: none;
           -webkit-user-select: none; user-select: none;
         }
-        .lpRow.active { background: ${T.artboard}; }
+        .lpRow.active { background: ${T.rowActive}; }
         .lpRow.dragging {
           position: relative; z-index: 3; box-shadow: 0 8px 22px rgba(0,0,0,0.45);
           cursor: grabbing;
@@ -3962,25 +4591,34 @@ export default function Home() {
         /* text + icons: light on the dull deselected rows, dark on the bright active row */
         .lpName {
           flex: 1; min-width: 0; font-family: ${T.mono}; font-size: 17px;
-          color: ${T.artboard}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          color: ${T.rowInk}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        .lpRow.active .lpName { color: ${T.bg}; }
+        .lpRow.active .lpName { color: ${T.rowActiveInk}; }
         .lpRowIcon {
           flex-shrink: 0; border: none; background: none; cursor: pointer;
-          color: ${T.artboard}; display: flex; align-items: center; justify-content: center;
+          color: ${T.rowInk}; display: flex; align-items: center; justify-content: center;
           padding: 0; width: 40px; height: 40px; border-radius: 8px;
         }
-        .lpRow.active .lpRowIcon { color: ${T.bg}; }
-        @media (hover: hover) { .lpRowIcon:hover { background: rgba(255,255,255,0.12); } }
+        .lpRow.active .lpRowIcon { color: ${T.rowActiveInk}; }
+        @media (hover: hover) { .lpRowIcon:hover { background: rgba(128,128,128,0.18); } }
         .lpEditBtn {
-          flex-shrink: 0; border: none; background: none; color: ${T.artboard}; cursor: pointer;
+          flex-shrink: 0; border: none; background: none; color: ${T.rowInk}; cursor: pointer;
           width: 40px; height: 40px; border-radius: 8px; padding: 0;
           display: flex; align-items: center; justify-content: center;
         }
-        .lpRow.active .lpEditBtn:not(.on) { color: ${T.bg}; }
-        @media (hover: hover) { .lpEditBtn:hover { background: rgba(255,255,255,0.12); } }
+        .lpRow.active .lpEditBtn:not(.on) { color: ${T.rowActiveInk}; }
+        @media (hover: hover) { .lpEditBtn:hover { background: rgba(128,128,128,0.18); } }
         .lpEditBtn.on { background: ${T.accent}; color: #fff; }
         .lpEditBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+        /* group header row + indented member rows (Procreate folders) */
+        .lpGroupRow { background: ${T.pill}; }
+        .lpChevron {
+          width: 18px; text-align: center; color: ${T.inkSoft}; font-size: 12px;
+          transition: transform 0.12s ease; flex-shrink: 0;
+        }
+        .lpChevron.open { transform: rotate(90deg); }
+        .lpGroupCount { color: ${T.inkSoft}; font-size: 12px; }
+        .lpRow.inGroup { margin-left: 18px; }
         .lpOpacity {
           display: flex; align-items: center; gap: 10px; padding-top: 4px;
         }
@@ -3991,7 +4629,7 @@ export default function Home() {
           background: ${T.artboard}; border-radius: 8px; height: 48px; overflow: hidden;
         }
         .lpBar button {
-          flex: 1; min-width: 0; border: none; background: none; color: ${T.bg};
+          flex: 1; min-width: 0; border: none; background: none; color: ${T.darkInk};
           cursor: pointer; height: 100%; padding: 0 4px;
           font-family: ${T.mono}; font-size: 14px;
         }
@@ -4045,7 +4683,7 @@ export default function Home() {
           text-align: left; padding: 11px 12px; border-radius: 6px;
           font-family: ${T.mono}; font-size: 15px; letter-spacing: 0.01em;
         }
-        .menuItem:hover { background: #6f6f6d; }
+        .menuItem:hover { background: ${T.hoverPill}; }
         .menuItem:disabled { opacity: 0.4; cursor: not-allowed; }
         .menuDiv { height: 1px; background: ${T.line}; margin: 2px 8px; }
 
@@ -4115,7 +4753,7 @@ export default function Home() {
           border: none; background: ${T.pill}; color: ${T.inkSoft}; cursor: pointer;
           border-radius: 6px; padding: 5px 11px; font-family: ${T.mono}; font-size: 14px;
         }
-        .cpNew:hover { background: #6f6f6d; color: ${T.ink}; }
+        .cpNew:hover { background: ${T.hoverPill}; color: ${T.ink}; }
         .cpPalList { display: flex; flex-direction: column; gap: 10px; }
         .cpEmpty { font-family: ${T.mono}; font-size: 12px; line-height: 1.5; color: ${T.inkSoft}; }
         .cpPal {
@@ -4206,7 +4844,7 @@ export default function Home() {
           border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 600;
           transition: background 0.12s;
         }
-        .seg:hover { background: #6f6f6d; }
+        .seg:hover { background: ${T.hoverPill}; }
         .seg.on { background: ${T.active}; color: ${T.activeInk}; }
 
         .pillRow { display: flex; gap: 8px; }
@@ -4236,7 +4874,7 @@ export default function Home() {
           background: ${T.pill}; border: none; border-radius: 8px; padding: 7px 9px;
           cursor: pointer; text-align: left; transition: background 0.12s;
         }
-        .savedApply:hover { background: #6f6f6d; }
+        .savedApply:hover { background: ${T.hoverPill}; }
         .savedName { font-family: ${T.mono}; font-size: 10px; color: ${T.ink};
           text-transform: uppercase; letter-spacing: 0.06em; }
         .savedSw { display: flex; flex-wrap: wrap; gap: 3px; }
@@ -4251,7 +4889,7 @@ export default function Home() {
           color: ${T.ink}; border-radius: 10px; cursor: pointer; font-size: 13px;
           font-weight: 600; text-align: center; display: block; transition: background 0.12s;
         }
-        .ghost:hover, .fileBtn:hover { background: #6f6f6d; }
+        .ghost:hover, .fileBtn:hover { background: ${T.hoverPill}; }
         .ghost.half { flex: 1; min-width: 0; }
         .primary {
           padding: 14px; border: none; cursor: pointer;
@@ -4304,7 +4942,7 @@ export default function Home() {
           background: ${T.pill}; border: 1px solid ${T.line};
           border-radius: 10px; padding: 16px; transition: all 0.12s;
         }
-        .techCard:hover { background: #6f6f6d; border-color: ${T.inkSoft}; }
+        .techCard:hover { background: ${T.hoverPill}; border-color: ${T.inkSoft}; }
         .techCard.on { border-color: ${T.accent}; }
         .techName { font-size: 14px; font-weight: 700; color: ${T.ink}; }
         .techDesc { font-family: ${T.mono}; font-size: 10px; line-height: 1.5; color: ${T.inkSoft}; }
@@ -4352,151 +4990,35 @@ export default function Home() {
           font-family: ${T.mono}; font-size: 9px; text-transform: uppercase;
           letter-spacing: 0.04em; padding: 8px 9px; border-radius: 6px;
         }
-        .artActions button:hover { background: #6f6f6d; }
+        .artActions button:hover { background: ${T.hoverPill}; }
         .artActions .del:hover { color: #fff; background: ${T.accent}; }
         .galleryFoot { display: flex; gap: 8px; }
         .galleryHint { text-align: center; }
+
+        /* ── universal bead library (gallery modal) ── */
+        .galleryHeadBtns { display: flex; gap: 8px; }
+        .galleryHeadBtns .ghost { width: auto; padding: 12px 18px; }
+        .libHint { font-family: ${T.mono}; font-size: 12px; line-height: 1.5; color: ${T.inkSoft}; }
+        .libRow { display: flex; align-items: center; gap: 10px; }
+        .libSw {
+          width: 40px; height: 34px; padding: 0; border: 1px solid ${T.line};
+          border-radius: 8px; background: none; cursor: pointer; flex-shrink: 0;
+        }
+        .libName {
+          flex: 1; min-width: 0; border: none; background: ${T.pill}; color: ${T.ink};
+          border-radius: 8px; padding: 8px 10px; font-family: ${T.mono}; font-size: 13px;
+        }
+        .libName::placeholder { color: ${T.inkSoft}; }
+        .libDel {
+          border: none; background: none; color: ${T.inkSoft}; cursor: pointer;
+          font-size: 18px; line-height: 1; padding: 6px 8px; border-radius: 6px; flex-shrink: 0;
+        }
+        .libDel:hover { color: #fff; background: ${T.accent}; }
+        .libAddRow { padding-top: 4px; border-top: 1px solid ${T.line}; }
+        .libAddRow .cpNew { flex-shrink: 0; }
+        .libEmpty { font-family: ${T.mono}; font-size: 12px; color: ${T.inkSoft}; text-align: center; padding: 10px 0; }
       `}</style>
     </div>
-  )
-}
-
-// minimal monochrome tool icons (inherit currentColor)
-function IconDraw() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 19l7-7 3 3-7 7-3-3z" />
-      <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
-      <path d="M2 2l7.586 7.586" />
-      <circle cx="11" cy="11" r="2" />
-    </svg>
-  )
-}
-function IconErase() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20 20H7L3 16a2 2 0 010-3l9-9a2 2 0 013 0l5 5a2 2 0 010 3l-7 8" />
-      <path d="M9 11l5 5" />
-    </svg>
-  )
-}
-function IconSelect() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="3 3">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-    </svg>
-  )
-}
-function IconLayers() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 2l9 5-9 5-9-5 9-5z" />
-      <path d="M3 12l9 5 9-5" />
-      <path d="M3 17l9 5 9-5" />
-    </svg>
-  )
-}
-function IconEye() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  )
-}
-function IconEyeOff() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M17.9 17.9A10.6 10.6 0 0112 19C5 19 1 12 1 12a18.5 18.5 0 014.2-5.1m3-1.6A10.6 10.6 0 0112 5c7 0 11 7 11 7a18.5 18.5 0 01-2.2 3.1" />
-      <path d="M9.9 9.9a3 3 0 004.2 4.2" />
-      <path d="M1 1l22 22" />
-    </svg>
-  )
-}
-function IconLock() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="11" width="18" height="11" rx="2" />
-      <path d="M7 11V7a5 5 0 0110 0v4" />
-    </svg>
-  )
-}
-function IconUnlock() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="11" width="18" height="11" rx="2" />
-      <path d="M7 11V7a5 5 0 019.9-1" />
-    </svg>
-  )
-}
-function IconImage() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <circle cx="8.5" cy="8.5" r="1.5" />
-      <path d="M21 15l-5-5L5 21" />
-    </svg>
-  )
-}
-function IconEdit() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-    </svg>
-  )
-}
-function IconCheck() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20 6L9 17l-5-5" />
-    </svg>
-  )
-}
-function IconHome() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 10.5L12 3l9 7.5" />
-      <path d="M5 9.5V21h14V9.5" />
-    </svg>
-  )
-}
-function IconMenu() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 6h18" /><path d="M3 12h18" /><path d="M3 18h18" />
-    </svg>
-  )
-}
-function IconUndo() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 14L4 9l5-5" />
-      <path d="M4 9h11a5 5 0 0 1 0 10h-1" />
-    </svg>
-  )
-}
-function IconRedo() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M15 14l5-5-5-5" />
-      <path d="M20 9H9a5 5 0 0 0 0 10h1" />
-    </svg>
   )
 }
 
@@ -4528,7 +5050,7 @@ function SizeFields({ canvasCm, setCanvasCm, unit, setUnit }) {
           border-radius: 7px; cursor: pointer; font-family: ${T.mono}; font-size: 13px;
           text-transform: uppercase; letter-spacing: 0.04em;
         }
-        .unitBtn:hover { background: #6f6f6d; }
+        .unitBtn:hover { background: ${T.hoverPill}; }
         .unitBtn.on { background: ${T.active}; color: ${T.activeInk}; }
         .sizeRow { display: flex; gap: 8px; }
       `}</style>

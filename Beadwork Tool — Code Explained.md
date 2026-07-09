@@ -392,6 +392,50 @@ there when you reopen — it used to vanish.
 
 ---
 
+## 6.7 The 2026-07-09 pass — shapes, library, groups, iOS icons
+
+**The colour-bleed fix.** At medium zoom the tool draws beads the fast way:
+flat colour **rectangles** with a repeating "bead-shaped holes" texture laid on
+top (only the colour showing *through the holes* is visible). Apex-row
+rectangles were drawn double-wide (they need to be for the far-out solid view),
+so their colour also sat under a *neighbouring empty* bead's hole — that's the
+half-bead "bleeding" you saw. Now, whenever the hole-texture is on, each bead's
+rectangle covers only **its own silhouette** (`carveCell` in `drawScene`), so
+colour can never show through an empty neighbour's hole.
+
+**Icons (`src/icons.jsx`).** All toolbar/panel icons are now from **Framework7
+Icons** — a free icon set drawn to look exactly like Apple's SF Symbols (the
+icons every iPhone app uses). Apple's own SF Symbols files aren't allowed on
+websites, so this is the legal twin. Each icon is just a filled outline
+(an SVG *path*) in one shared little component.
+
+**QuickShape (`src/lib/quickshape.js`).** Draw a rough circle/box/line and
+**hold the pen still** at the end (~0.6 s): the wobbly stroke snaps to the
+perfect shape, drawn as a one-bead-thick outline. Keep dragging to resize;
+lift the pen to place it (one undo step). How it decides: the stroke is
+resampled to evenly spaced points, then — open stroke → line; closed loop with
+**sharp corners and straight sides** → triangle/rectangle/polygon; otherwise →
+ellipse/circle. The outline is painted by snapping each point of the ideal
+shape to the **nearest bead**, so it never leaves gaps on the staggered weave.
+
+**Universal bead library.** The gallery's **Bead library** button opens your
+device-wide catalog of real bead colours (add, name, recolour, remove). In the
+editor's colour panel the library appears as a swatch strip — tap to use — and
+any custom colour you mix shows a **+ Add current** button so the catalog grows
+from real use. Stored next to your artworks in IndexedDB; artwork palettes are
+unchanged (they can use library colours *or* anything custom).
+
+**Layer groups (Procreate folders).** Select a layer and tap **Group** (bottom
+of the layers panel): it wraps that layer + the one below into a folder row.
+Tap the folder to open/close it; the eye/lock on the folder hides/locks
+**everything inside**; drag the folder to move the whole block; drag a layer
+*between* a folder's rows to put it in (or out). **Flatten** merges the
+folder's layers into one (top colour wins), **Ungroup** removes just the
+wrapper. Under the hood the layer list stays a simple flat array — each member
+just remembers its folder's id (`groupId`) — so drawing speed is untouched.
+
+---
+
 ## 7. Where to make common changes
 
 - 3-bead weave spacing looks off → `PACK_X` / `PACK_Y` in `geometry.js`
@@ -504,3 +548,47 @@ Four guards keep it under the line:
   you zoom out or pan past what was on screen) is briefly blank until that crisp
   redraw a split-second later. Measured: a fast zoom on a filled 100×100 cm canvas
   went from ~37 slow frames to **zero** (verified by `scripts/zoompan.mjs`).
+
+## The Kinetic Lab (`kinetic-lab/` — its own little app)
+
+A second, separate app (it runs on `http://localhost:3001` with its own
+`npm run dev` inside the `kinetic-lab` folder). You export a design from the
+main tool as a `.beadwork.json` file, import it here, and the design hangs
+from a bar as one piece of woven fabric that swings, ripples and can be pulled
+around — a preview of how the real piece would move. Three new ideas in it:
+
+- **`weave.js` — a pocket copy of the grid math.** The kinetic app needs the
+  same bead positions, tilts and “which cells hold a bead” rules as the main
+  tool, but it's a separate app, so it carries its own small copy of those
+  formulas. If the packing numbers ever change in `src/lib/geometry.js`, this
+  copy must be updated by hand too (there's a comment at the top saying so).
+  It also knows how to read every version of the save file the main tool has
+  ever written (v1 up to today's v4 with layers and groups).
+
+- **`cloth.js` — fabric physics without a physics library.** The trick that
+  keeps it fast: the beads themselves are NOT simulated. A coarse invisible
+  net of at most ~28×40 “nodes” covers the panel; only that net is simulated
+  (a classic technique called *Verlet cloth* — each node remembers where it
+  was last frame, and short “keep your distance” rules between neighbouring
+  nodes are relaxed a few times per step, which is what makes it behave like
+  cloth). Every bead just remembers *which little square of the net it sits
+  in* and its exact spot inside that square, and each frame it's placed by
+  blending the square's four corners. So a design with 50,000 beads costs the
+  simulation exactly the same as one with 500 — only drawing scales up.
+
+- **Sprites — draw each bead as a stamp.** Every unique colour+tilt gets
+  drawn once into a tiny hidden image (colour, ink outline, glaze highlight),
+  and each frame every bead just stamps its pre-drawn image at its current
+  spot. Stamping is far cheaper than re-outlining a bead shape thousands of
+  times per frame — the demo runs at 90 fps.
+
+The dials map to real things: gravity is the true 9.81 m/s² scaled to screen
+pixels (the slider lowers it, because full gravity on a tiny screen panel
+looks frantic), “breeze” is a gentle wave of sideways force that varies across
+the panel so it ripples rather than tilts, “stiffness” is how many times the
+distance rules are enforced per step, and “settle” is damping — how quickly
+swinging dies away. Grab mode drags the nearest net node; Paint mode
+recolours the bead you click (and writes the change back into the design, so
+it survives a re-hang). “Record motion video” films the canvas into a `.webm`
+file using the browser's built-in screen-to-video recorder (`MediaRecorder`).
+Checked end-to-end by `scripts/kinetic.mjs` — 9 automated checks.

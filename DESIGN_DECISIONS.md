@@ -602,6 +602,202 @@ IMPLEMENTED 2026-07-02 (`src/lib/chart.js`, `src/App.jsx`) — **fast PNG export
   (was a single ~3.6s block before yielding), valid 3648×4113 PNG, legend count
   matches (#F3CEDE ×37698), no errors.
 
+## iOS-look + shapes + palette libraries pass (grilling 2026-07-09)
+LOCKED:
+1. **Icons: Framework7 Icons** (MIT, drawn to match SF Symbols) replace current
+   icons across the UI for the iOS look. The `assets/icons/SF-Symbols-8.dmg`
+   is NOT usable (macOS installer; Apple license bars SF Symbols on the web).
+2. **Shapes: Procreate-style hold-to-snap (QuickShape).** Draw freehand, hold
+   the pointer still at stroke end → stroke snaps to the detected shape; drag
+   to adjust before commit. No dedicated shape toolbar tools.
+3. **Detected shapes: line, circle/ellipse, rectangle/square, triangle/polygon.**
+4. **Shapes paint OUTLINE only** (1-bead-thick line of the current colour);
+   interior filled afterwards via flood-fill if wanted.
+5. **Universal bead library** (device-local, IndexedDB, opened from the
+   gallery/dashboard): the catalog of real bead colours the studio stocks.
+   **User-curated** — starts from the current 5 defaults; add (picker + name),
+   rename, remove. No pre-seeded catalog.
+6. **Per-artwork palette = universal picks + custom.** In the editor the
+   palette card gains a "from library" picker; custom colours via the free
+   picker stay allowed. (Default taken: a custom colour gets an "add to
+   library" affordance so the catalog grows from real use.)
+7. **Colour bleed bug confirmed = the known mid-zoom rects artifact** (apex
+   cells drawn double-wide leak ~half a bead into empty neighbours at the
+   edge of a shape, rects/texture regime only). Fix that render path; crisp
+   ovals + export are unaffected.
+8. **Layer groups = Procreate folders.** Collapsible group rows in the layers
+   panel: hide/lock/rename the group, reorder as a unit, Flatten merges the
+   group to one bead layer. Merge-down (exists) stays for single layers.
+
+Defaults taken (change if wrong): layers panel gets WIDER so bottom-bar
+buttons (Clear etc.) fit comfortably; groups are one level deep (no folders
+inside folders); the Background layer can't join a group; a group's Flatten
+uses the same top-wins composite as merge-down and is one undo step.
+
+IMPLEMENTED 2026-07-09 — #8 layer groups (App.jsx):
+- Model: the layer stack stays a FLAT array (hot paths untouched); a group is
+  `{id,name,visible,locked,collapsed}` in a parallel `groups` list and member
+  layers carry `groupId`. Members are always CONTIGUOUS in z-order; every op
+  preserves that. Effective flags: `layerShown`/`layerHeld` = layer AND its
+  group — used by drawScene, export (flattenVisible/chartComposite), canEdit,
+  the blocked-draw toast, and the image Adjust button.
+- UI: group header row in the panel (chevron ▸/▾, name — double-tap renames,
+  member count, Flatten, lock, eye). Tap header = collapse/expand. lpBar gains
+  Group/Ungroup: Group wraps the active layer + the one below (or joins the
+  group directly below); Ungroup dissolves the active layer's group. New +
+  duplicated layers stay in the active/source layer's group. Bg never groups.
+- Drag: rows move in DISPLAY-row units. Dropping a layer between a group's
+  rows JOINS it; dropping outside leaves it (Procreate drag-into-folder). A
+  group header drags its whole block as one unit and can't land inside
+  another group (snaps out — one level only). Collapsed groups count their
+  hidden members in the index math.
+- Flatten: bead members merge top-wins into ONE layer named after the group,
+  at the bottom member's slot — one undo step. Image members block flatten
+  (toast). Undo/redo snapshots now carry `groups`; empty groups are dropped
+  after delete/merge/drag-out.
+- Save format **v4**: `groups` array + per-layer `groupId` (dangling ids
+  dropped on load); v1–v3 saves load with no groups. Fresh artworks reset
+  groups. Metadata toggles (group hide/lock/rename/collapse) are not
+  undoable, same policy as layers.
+- Verified `scripts/groupcheck.mjs` (14 checks): group/ungroup, drag-into-
+  group, hide→beads vanish, lock→"Group is locked" toast, collapse/expand,
+  flatten+undo, v4 reload persistence, no errors. Regressions re-run green:
+  bleedtest, quickshape, beadlib + `npm run build`. NOTE for scripts: with
+  the layers panel open, the first canvas tap only closes the panel; boot
+  after reload lands on the GALLERY (pre-existing reskin behaviour — differs
+  from the older "reopen last-edited artwork" decision, flagged to the user).
+
+IMPLEMENTED 2026-07-09 — #5/#6 universal bead library (App.jsx, IndexedDB):
+- Library = `{id, color, name}` list in the existing IndexedDB `meta` store
+  (key `beadLibrary`, no schema bump). Seeded once from DEFAULT_PALETTE.
+- Gallery: "Bead library" button (head, next to + New artwork) → modal with
+  swatch + name + × per row, live colour editing, and a draft add-row
+  (duplicates ALLOWED here on purpose — same hex can be a different bead
+  finish). Editor colour panel: a "Bead library" swatch strip above the
+  palettes (tap = pick), and a "+ Add current" button that appears only when
+  the current colour is NOT yet in the library (dupe-guarded).
+- Artwork palettes remain per-artwork and free (universal + custom allowed,
+  per the grill). Fixed a UI typo: "Colour palettte" → "Colour palette".
+- Verified `scripts/beadlib.mjs` (12 checks): seed, add/rename/remove,
+  editor strip, pick, add-current guard + growth, reload persistence.
+
+IMPLEMENTED 2026-07-09 — #2/#3 QuickShape (`src/lib/quickshape.js`, App.jsx):
+- Hold the pen still ~600ms mid-draw (≤7px wobble) → the freehand path snaps
+  to the fitted shape; keep dragging to ADJUST (line: endpoint follows; circle:
+  radius; ellipse/rect: axes from the pointer in the shape's frame; poly:
+  uniform scale about centroid); lift places it — ONE undo step (reuses the
+  straight-line-snap stroke-replay + commit path, so alpha lock/layers work).
+- Fitting (pure module `lib/quickshape.js`): open stroke → line. Closed →
+  resample 96 + 3-pt smooth; corner detection = local-max turning angle >48°;
+  3–8 corners AND straight sides → triangle/rect/polygon (a polygon's sides
+  must be straight — if the stretches between corners bulge >7% like arcs,
+  it's wobble on a round shape → ellipse; this stopped hand circles reading
+  as polygons). 4 corners with paired parallel edges → rectangle (rotation
+  snapped upright within 10°; |w−h|<15% → square). Roundish → PCA ellipse
+  (boundary variance → radii; |rx−ry|<18% → circle).
+- Outlines paint brush-thick via NEAREST bead per sample (not the oval
+  hit-test — an ideal curve slips between the staggered lattice's ovals,
+  which left dashed outlines, verticals worst). Toast names the shape.
+- Perf: path recording is the existing thinned stroke buffer; adjust repaints
+  are rAF-throttled (one Map rebuild per frame, same cost class as the
+  line-snap). No new state in React render path.
+- Verified `scripts/quickshape.mjs`: wobbly circle→Circle (hollow ring, grows
+  when dragged), wavy open stroke→Line, sloppy square→Square (outline only),
+  one undo removes the shape, worst long-task 196ms, no errors. Screenshots
+  quickshape-circle/square.png show continuous woven outlines.
+
+IMPLEMENTED 2026-07-09 — #1 icons + wider layers panel (`src/icons.jsx`, App.jsx):
+- New `src/icons.jsx`: the 14 UI icons are now Framework7 Icons path data
+  (MIT, matches SF Symbols; filled 56×56 paths, currentColor) behind the SAME
+  component names/usage as the old outline set — zero call-site changes, no
+  new dependency, no icon font. Draw=paintbrush, Select=lasso (Procreate),
+  Layers=square_stack_3d_up, plus eye/lock/photo/pencil/checkmark/house/
+  line_horizontal_3/arrow_uturn_l+r. Eraser is hand-drawn in the same filled
+  style (SF/F7 has no eraser). Old inline SVG functions deleted from App.jsx.
+- Layers panel widened 340→420px so the bottom bar (Duplicate · Alpha lock ·
+  Clear · Delete) fits comfortably. Verified `scripts/iconshot.mjs` screenshot;
+  no page errors.
+
+IMPLEMENTED 2026-07-09 — #7 colour-bleed fix (`src/App.jsx`, `threeBead.js`):
+- Cause: in the rects regime, `rectCell` drew apex (even-row) cells DOUBLE-WIDE
+  (needed for full coverage in the far-out solid overview, apex rows being
+  half-density). With the texture overlay on, colour shows ONLY through the
+  tile's punched bead holes — and a double-wide apex rect sat under an EMPTY
+  neighbour's hole, showing a phantom half-bead at every shape edge.
+- Fix: two rect kinds in `drawScene`. Coverage rects (texture OFF, beads
+  sub-pixel) stay full-cell/double-wide. Carve rects (`carveCell`, texture ON)
+  cover only the bead's own rotated-silhouette bounding box (per-tilt cached —
+  no per-bead trig), so colour can never back an empty neighbour's hole. Also
+  fixed as a bonus: single base beads were previously UNDER-covered (Px×Py rect
+  < the 45°-tilted silhouette bbox → cropped bead tips in texture mode).
+- `apexWide: true` is now a 3-bead technique flag: the 1-bead aligned grid
+  (full density) was wrongly double-widening its even rows in rects mode and in
+  the erase-floor clip; both now guard on `tech.apexWide`.
+- Verified `scripts/bleedtest.mjs`: 9 isolated beads at 103% zoom on a 100×100
+  canvas (texture regime) all render with blob aspect ≤ 1.33 (bug gave ~2.2 for
+  apex); diagonal-stroke edge screenshot shows whole beads, no half-bead bleed;
+  worst long-task 83ms; no page errors. NOTE for scripts: taps only paint when
+  they land ON a bead oval (gap taps do nothing, by design), and the reskin's
+  new-artwork flow is gallery → New artwork → technique → "Canvas & beads"
+  dialog (canvas size lives THERE now) → Create artwork.
+
+## Kinetic tool (grilling 2026-07-09)
+A NEW tool, evolving the `kinetic-lab/` Matter.js prototype. LOCKED:
+1. **Purpose: design real kinetic pieces** — strung/hanging beadwork (curtains,
+   tassels, danglers); the physics sim previews how the real piece hangs/moves.
+   Not a website toy; output feeds real making.
+2. **Separate app** — stays its own Vite app in `kinetic-lab/`, own deploy.
+   Main tool untouched.
+3. **Desktop-first** — mouse-driven; iPad is a bonus, not a requirement.
+4. **v1 scope: hanging strands** — strands of beads from a bar/frame (curtains,
+   wall hangings, danglers). One physics model: gravity + swing.
+5. **Authoring = import from the main beadwork tool** (user's own idea): bring a
+   design across and visualise it hanging/moving. (Mapping + editability being
+   grilled.)
+6. **Output: stringing chart + motion video** — per-strand bead order/lengths/
+   counts, plus an exported clip of the piece moving.
+7. **Real physical units** — bead mm, strand/frame cm; same what-you-design-is-
+   what-you-get philosophy as the main tool.
+8. **Import maps to FABRIC** — the whole woven panel hangs as ONE connected
+   cloth (soft-body), truest to a real 3-bead woven panel (chosen over
+   columns→independent strands).
+9. **Editing here: physics tweaks + occasional design edits** ("sometimes").
+   v1 = hang/physics controls + simple tap-to-recolour; structural redesign
+   stays in the main tool. (Interpretation — change if wrong.)
+10. **Transfer = `.beadwork.json` file** — kinetic tool gets an Import button
+    reading the main tool's existing export; zero changes to the main tool.
+
+Defaults taken (change if wrong): panel pinned along its top row to a bar;
+motion video = WebM captured off the canvas (MediaRecorder); the weave CHART
+stays the main tool's export — kinetic adds the video; perf approach = coarse
+physics lattice with bead positions interpolated between nodes (never one
+physics body per bead — north star: no lag at any design size).
+
+IMPLEMENTED 2026-07-09 (kinetic-lab/src: `weave.js`, `cloth.js`, `App.jsx`):
+- Matter.js sandbox replaced. `weave.js` = hand-kept copy of the main tool's
+  pure lattice math (3-bead + 1-bead packing/tilt/density, superellipse
+  silhouette) + `parseDesign` accepting save versions v1–v4 (flattens visible
+  bead layers top-wins, honours hidden v4 groups, `pack` spacing).
+- `cloth.js` = custom Verlet cloth: node grid capped at ~28×40 regardless of
+  design size; structural+shear constraints, 3 substeps × N iterations, top
+  row pinned to the bar; beads bind ONCE to a cell (bilinear weights) and each
+  frame get position + local rotation from the deformed cell.
+- Rendering: one baked sprite per (colour, weave-tilt) — fill + ink rim +
+  glaze highlight; per-frame work = position + drawImage per bead; per-bead
+  rotation drops above 20k beads (LOD). Demo design (studio 5-colour stripes)
+  loads at start; first row hangs from the bar on drawn threads.
+- Dials: gravity (real 9810 mm/s² × px-per-mm, 0.05–1 g), breeze (spatial
+  sine field), stiffness (iterations), damping; Grab (pointer pulls nearest
+  cloth node) / Paint (tap-to-recolour, palette from the imported design;
+  recolours write back into the design map so they survive re-hang/resize);
+  Record motion video (canvas captureStream → WebM download); Re-hang flat.
+- Verified `scripts/kinetic.mjs` (9 checks, all pass, 90fps demo): demo loads,
+  beads render, grab deforms, v4 import round-trip, bead count, REC toggles +
+  downloads webm, no page errors. Screenshots kinetic-view/kinetic-drag.png.
+- NEXT (not built yet): stringing/hanging spec export, wider bead-size sanity
+  vs huge imports (50k+ beads — LOD covers render, sim is capped already),
+  optional deploy target for the kinetic app.
+
 IMPLEMENTED 2026-07-03 (`src/App.jsx`) — **snappy zoom/pan** (drill item #3,
 responsiveness):
 - Problem: every zoom/pan step re-ran `drawScene`, which re-iterates every placed

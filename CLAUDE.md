@@ -54,6 +54,11 @@ must be checked against the mockup, never assumed; that was a prior failure).
 - **`src/lib/chart.js`** — the printed-chart renderer (outlined beads, guide
   lines, edge numbers, colour-key legend) shared by the on-screen guides overlay
   and the PNG export.
+- **`src/lib/quickshape.js`** — pure shape fitting for the Procreate-style
+  hold-to-snap (QuickShape): stroke points in → line/circle/ellipse/rect/
+  polygon out, plus outline sampling and drag-to-adjust. No canvas/React.
+- **`src/icons.jsx`** — the UI icon set (Framework7 Icons path data, MIT —
+  matches Apple's SF Symbols look; filled 56×56 paths, inherit currentColor).
 - **`src/techniques/`** — per-weave grid rules (`index.js` registry +
   `threeBead.js` / `oneBead.js`). One artwork = one technique, chosen up front.
   `App.jsx` and `chart.js` call through the **active technique** (`tech.beadExists`,

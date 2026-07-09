@@ -40,6 +40,7 @@ export default defineTechnique({
   subtitle: '3-BEAD TECHNIQUE',
   exists: beadExists,
   beadShapeN: 2.4, // soft oval silhouette
+  apexWide: true, // apex (even) rows are half-density → coverage rects span 2 cells
 
   // Apex (even) rows lie horizontal; tilted (odd) rows mirror ±45° in a
   // checkerboard.
