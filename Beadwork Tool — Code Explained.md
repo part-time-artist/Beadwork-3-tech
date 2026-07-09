@@ -400,8 +400,11 @@ top (only the colour showing *through the holes* is visible). Apex-row
 rectangles were drawn double-wide (they need to be for the far-out solid view),
 so their colour also sat under a *neighbouring empty* bead's hole — that's the
 half-bead "bleeding" you saw. Now, whenever the hole-texture is on, each bead's
-rectangle covers only **its own silhouette** (`carveCell` in `drawScene`), so
-colour can never show through an empty neighbour's hole.
+colour is painted as a small rectangle **rotated with the bead** (`carveCell`
+in `drawScene`) — it wraps the bead's silhouette snugly, so colour can never
+show through an empty neighbour's hole. (A first attempt used an un-rotated
+box; for the 45°-tilted beads that box is much bigger than the bead and still
+left thin sliver dashes on neighbours — the rotation is what makes it exact.)
 
 **Icons (`src/icons.jsx`).** All toolbar/panel icons are now from **Framework7
 Icons** — a free icon set drawn to look exactly like Apple's SF Symbols (the
@@ -592,3 +595,33 @@ recolours the bead you click (and writes the change back into the design, so
 it survives a re-hang). “Record motion video” films the canvas into a `.webm`
 file using the browser's built-in screen-to-video recorder (`MediaRecorder`).
 Checked end-to-end by `scripts/kinetic.mjs` — 9 automated checks.
+
+**Making the fabric flow (the "too sticky" fix).** Three physics changes turned
+the stiff first version into something that moves like real cloth. (1) *Damping*
+is how much movement the simulation quietly deletes each moment to keep things
+calm — the old setting deleted so much that every swing died in about a second,
+which read as "sticky"; now it keeps ~99.7% per frame and the panel swings on
+for seconds. (2) Grabbing used to nail a point of the fabric to your cursor,
+frozen still — so letting go stopped everything dead. Now the grabbed point is
+*steered* toward the cursor while keeping its own speed, so you can throw the
+fabric and it follows through naturally. (3) Real fabric barely stretches but
+folds and drapes easily — so the "keep your distance" rules are no longer all
+equally strict: pulling apart is resisted fully, squashing together only half
+(cloth buckles into folds rather than pushing back like cardboard), and the
+diagonal rules are much looser (that's what draping is). The simulation also
+now runs in fixed 1/240-second slices so it looks equally smooth on any screen.
+
+**Cotton, not elastic (the "too bouncy" fix).** The bounce came from a quirk of
+how cloth simulations work: the "keep your distance" rules between nodes are
+only *nudged* toward correct a few times per step, never perfectly solved, so
+there's always a little leftover stretch — and leftover stretch stores energy
+and snaps back, exactly like elastic thread. The fix is a final **strain
+limit** pass: after the gentle nudging, every horizontal and vertical thread is
+*hard-clamped* to at most 1% over its natural length, the way cotton simply
+refuses to stretch. No stored stretch, no spring, no bounce — the panel now
+swings like a pendulum and drapes, instead of boinging. Two smaller helpers:
+weak "bend" rules between every-other node smooth out jelly-like ripples, and
+the diagonal rules got a bit firmer because a woven bead net holds its shape
+better than loose cloth. Measured: pulling the panel's bottom edge as far as
+the mouse allows stretches it only ~5% (that's the weave giving, not the
+thread), and on release it returns in a quarter-second with zero bounce.

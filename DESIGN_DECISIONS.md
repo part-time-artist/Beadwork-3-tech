@@ -730,6 +730,17 @@ IMPLEMENTED 2026-07-09 — #7 colour-bleed fix (`src/App.jsx`, `threeBead.js`):
   no per-bead trig), so colour can never back an empty neighbour's hole. Also
   fixed as a bonus: single base beads were previously UNDER-covered (Px×Py rect
   < the 45°-tilted silhouette bbox → cropped bead tips in texture mode).
+- **Round 2 (same day; user screenshot `assets/fixes/colour bleed beads.png`):
+  still bled.** The AXIS-ALIGNED bbox of a ±45° bead is a big square whose
+  edges still slid under neighbouring beads' punched holes → thin sliver
+  dashes on empty neighbours. `carveCell` now paints the dw×dh rect ROTATED
+  with the bead (a 4-point quad; per-tilt cached half-axis vectors, no
+  per-bead trig) — it circumscribes the silhouette exactly, so nothing is
+  left to show under a neighbour's hole. `bleedtest.mjs` gained check #3b:
+  connected-component analysis per isolated bead — ANY colour fragment
+  disconnected from the bead counts as bleed. Result: 0–3 stray px
+  (anti-aliasing) vs the visible dashes before; perf unchanged (worst task
+  253ms).
 - `apexWide: true` is now a 3-bead technique flag: the 1-bead aligned grid
   (full density) was wrongly double-widening its even rows in rects mode and in
   the erase-floor clip; both now guard on `tech.apexWide`.
@@ -797,6 +808,51 @@ IMPLEMENTED 2026-07-09 (kinetic-lab/src: `weave.js`, `cloth.js`, `App.jsx`):
 - NEXT (not built yet): stringing/hanging spec export, wider bead-size sanity
   vs huge imports (50k+ beads — LOD covers render, sim is capped already),
   optional deploy target for the kinetic app.
+
+RETUNED 2026-07-09 (user: "too sticky… fake, should flow like fabric") —
+`cloth.js` + loop in App.jsx:
+- Damping default 0.985 → **0.997** (the old default ate ~60% of all motion
+  per second — that WAS the stickiness; now swings persist several seconds).
+- **Grab steers instead of pins**: the grabbed node moves 55%-toward-pointer
+  per substep with px/py untouched, so it keeps a real velocity — the fabric
+  can be thrown, and release mid-swing flows instead of stopping dead.
+- **Anisotropic constraints** (the fabric-vs-rubber fix): structural stretch
+  1.0 / compression 0.5 (cloth buckles into folds, doesn't push back);
+  shear (diagonals) 0.35/0.25 (fabric drapes/shears easily). Was uniform 1.0.
+- Sim now runs **fixed 1/240s substeps** via an accumulator (SUB_DT export),
+  so 60/90/120Hz displays all get the same smooth motion; iterations are per
+  substep (slider 1–6, default 3). Node grid finer: caps 28×40 → **36×52**.
+- Breeze force is now independent of the gravity dial. Gravity default 0.45g.
+- Measured (fling-release probe): sustained fabric motion 4s+ after release
+  (was dead in ~1s); all 9 kinetic.mjs checks still pass at 90fps.
+
+RETUNED AGAIN 2026-07-09 (user: "too elastic — beadwork is cotton thread,
+it would not bounce"): the swing must be pendulum + drape, never spring.
+- **Strain limit** (the key fix): after normal relaxation, 2 hard passes
+  clamp every STRUCTURAL thread to ≤1.01× rest length (`STRAIN_LIMIT`,
+  cloth.js) — leftover solver stretch can no longer store spring energy,
+  which is exactly what the bounce was.
+- **Bend constraints added** (kind 2: skip-one neighbours, stiffness 0.18)
+  — kill the jelly ripples without stiffening the drape.
+- Shear up 0.35→0.5, structural compression 0.5→0.6 (a woven bead net is
+  firmer in-plane than loose cloth); damping default 0.997→0.995 (swings
+  settle like beads on thread, not endless jello); iterations default 4.
+- Measured: yanking the panel's bottom edge to the floor extends it only
+  4.7% (weave give, not stretch); on release the bottom edge returns in
+  <250ms and holds ±1px — zero vertical bounce. Still 90fps, 9/9 checks.
+- 2026-07-09 "decrease the bounce to 0": `STRAIN_LIMIT` 1.01 → **1.0**
+  (threads clamp at exactly rest length, 3 passes). Bottom edge after a
+  full yank-release: flat ±1px from the first sample — bounce is zero.
+  The ~4.6% give under an active pull is the weave narrowing (shear),
+  i.e. drape, and stays — hardening it would make the panel a rigid board.
+
+RESTYLED 2026-07-09 (per user): the "Raw Ceramic" serif/mono editorial look is
+GONE. Kinetic UI = **Satoshi only** (sans, via Fontshare CDN), clean +
+contemporary: floating rounded panels (16px radius) on a #F1F0EE ground, NO
+hairline borders or outline strokes anywhere (buttons are soft-filled,
+radius 10), sentence-case labels (no UPPERCASE_SNAKE), intro text +
+instructions block removed, status = a black pill toast over the canvas,
+bead sprites lose the ink rim (fill + glaze highlight only).
 
 IMPLEMENTED 2026-07-03 (`src/App.jsx`) — **snappy zoom/pan** (drill item #3,
 responsiveness):

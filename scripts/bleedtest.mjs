@@ -78,15 +78,46 @@ const blobs = await page.evaluate((pts) => {
     const x0 = Math.round((px - rect.left) * sx) - S
     const y0 = Math.round((py - rect.top) * sx) - S
     const d = ctx.getImageData(x0, y0, 2 * S, 2 * S)
-    let minx = Infinity, maxx = -1, miny = Infinity, maxy = -1, n = 0
-    for (let y = 0; y < d.height; y++) for (let x = 0; x < d.width; x++) {
-      const i = (y * d.width + x) * 4
-      if (!isBead(d.data[i], d.data[i + 1], d.data[i + 2])) continue
-      n++
+    const W = d.width, H = d.height
+    const mask = new Uint8Array(W * H)
+    let n = 0
+    for (let i = 0; i < W * H; i++) {
+      if (isBead(d.data[i * 4], d.data[i * 4 + 1], d.data[i * 4 + 2])) { mask[i] = 1; n++ }
+    }
+    if (n <= 8) continue
+    // connected components (4-neighbour): the bead is the biggest; every other
+    // coloured fragment in the crop is BLEED (slivers under neighbours' holes)
+    const compOf = new Int32Array(W * H).fill(-1)
+    const sizes = []
+    const stack = []
+    for (let i = 0; i < W * H; i++) {
+      if (!mask[i] || compOf[i] >= 0) continue
+      const id = sizes.length
+      let size = 0
+      stack.push(i)
+      compOf[i] = id
+      while (stack.length) {
+        const p = stack.pop()
+        size++
+        const x = p % W, y = (p / W) | 0
+        for (const q of [x > 0 && p - 1, x < W - 1 && p + 1, y > 0 && p - W, y < H - 1 && p + W]) {
+          if (q !== false && mask[q] && compOf[q] < 0) { compOf[q] = id; stack.push(q) }
+        }
+      }
+      sizes.push(size)
+    }
+    const main = Math.max(...sizes)
+    const stray = n - main
+    // bbox of the main component only
+    const mainId = sizes.indexOf(main)
+    let minx = Infinity, maxx = -1, miny = Infinity, maxy = -1
+    for (let i = 0; i < W * H; i++) {
+      if (compOf[i] !== mainId) continue
+      const x = i % W, y = (i / W) | 0
       if (x < minx) minx = x; if (x > maxx) maxx = x
       if (y < miny) miny = y; if (y > maxy) maxy = y
     }
-    if (n > 8) out.push({ w: maxx - minx + 1, h: maxy - miny + 1, n })
+    out.push({ w: maxx - minx + 1, h: maxy - miny + 1, n: main, stray, frags: sizes.length - 1 })
   }
   return out
 }, pts)
@@ -98,6 +129,11 @@ ok('#2 painted beads found (≥6 of 20 taps land on ovals)', blobs.length >= 6, 
 // apex silhouette bbox aspect = (Bh·1.25? no —) w/h = Bh/Bw = 1.5625 max with
 // the fix; the double-wide bug gave ≈ 2.2+. Base beads ≈ 1.0 either way.
 ok('#3 no half-bead bleed (blob aspect ≤ 1.8)', worstAspect > 0 && worstAspect <= 1.8, `aspects: ${aspects.join(', ')}`)
+// slivers: ANY coloured fragment disconnected from the bead is bleed showing
+// under a neighbouring empty bead's hole (the user's screenshot). Allow a few
+// px of anti-aliasing noise, nothing more.
+const worstStray = Math.max(...blobs.map((b) => b.stray))
+ok('#3b no sliver fragments on neighbours', worstStray <= 6, `stray px per bead: ${blobs.map((b) => b.stray).join(', ')}`)
 
 // a thick diagonal stroke for visual edge inspection
 const brush = page.locator('input[type="range"]').first()

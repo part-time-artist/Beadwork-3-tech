@@ -1894,21 +1894,30 @@ export default function Home() {
         const wide = apexWide && row % 2 === 0
         p.rect(cx - (wide ? geo.Px : geo.Px / 2), cy - geo.Py / 2, wide ? geo.Px * 2 : geo.Px, geo.Py)
       }
-      // Carve rects (texture overlay on): colour shows ONLY through the tile's
-      // punched bead holes, so each bead's rect need cover just its OWN
-      // silhouette — the rotated silhouette's bounding box. Full-cell rects
-      // leaked here: a double-wide apex rect sat under an EMPTY neighbour's
-      // punched hole and showed a phantom half-bead at shape edges (the
-      // mid-zoom "colour bleeding" bug).
-      const bboxHalf = new Map() // tilt → [halfW, halfH] (few distinct tilts)
+      // Carve quads (texture overlay on): colour shows ONLY through the tile's
+      // punched bead holes, so each bead's colour need cover just its OWN
+      // silhouette. That cover must be the dw×dh rect ROTATED with the bead —
+      // a 4-point quad. An axis-aligned bounding box of a ±45° bead is a much
+      // bigger square whose edges still slid under NEIGHBOURING beads' punched
+      // holes, leaving sliver dashes on empty beads (the reported "colour
+      // bleeding"; before that, double-wide apex cell rects leaked half-beads).
+      // The quad circumscribes the silhouette exactly, so its own hole is fully
+      // backed and there's nothing left to show under a neighbour's hole.
+      const quadAxes = new Map() // tilt → rotated half-axis vectors (few distinct tilts)
       const carveCell = (p, cx, cy, col, row) => {
         const t = tiltFor(col, row)
-        let hh = bboxHalf.get(t)
-        if (!hh) {
-          const c = Math.abs(Math.cos(t)), s = Math.abs(Math.sin(t))
-          bboxHalf.set(t, (hh = [(dw * c + dh * s) / 2, (dw * s + dh * c) / 2]))
+        let v = quadAxes.get(t)
+        if (!v) {
+          const c = Math.cos(t), s = Math.sin(t)
+          // half-extent vectors of the bead rect in screen space
+          quadAxes.set(t, (v = [(dw / 2) * c, (dw / 2) * s, -(dh / 2) * s, (dh / 2) * c]))
         }
-        p.rect(cx - hh[0], cy - hh[1], hh[0] * 2, hh[1] * 2)
+        const [hx, hy, vx, vy] = v
+        p.moveTo(cx + hx + vx, cy + hy + vy)
+        p.lineTo(cx - hx + vx, cy - hy + vy)
+        p.lineTo(cx - hx - vx, cy - hy - vy)
+        p.lineTo(cx + hx - vx, cy + hy - vy)
+        p.closePath()
       }
       const paintCell = texActive ? carveCell : rectCell
 
