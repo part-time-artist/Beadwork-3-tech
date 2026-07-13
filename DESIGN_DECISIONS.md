@@ -602,6 +602,24 @@ IMPLEMENTED 2026-07-02 (`src/lib/chart.js`, `src/App.jsx`) — **fast PNG export
   (was a single ~3.6s block before yielding), valid 3648×4113 PNG, legend count
   matches (#F3CEDE ×37698), no errors.
 
+## Fixes pass 2026-07-13 (user reports)
+1. **1-bead texture bleed ("half beads coloured").** `beadTexture` hardcoded
+   the 3-bead odd-row shift (`Px/2`) when punching the tile's bead holes; the
+   aligned 1-bead grid has NO shift, so odd-row holes sat half a bead off the
+   real lattice and colour showed through the wrong holes. Fix: use
+   `geo.rowOffset` (Px/2 on 3-bead, 0 on 1-bead). Verified
+   `scripts/bleedtest-1bead.mjs` (20/20 taps → clean upright blobs, aspect
+   0.8, zero stray px); 3-bead bleedtest unchanged (rowOffset identical there).
+2. **Export backgrounds (SUPERSEDES locked decision #10 "transparent OR
+   on-screen choice" and the later "always white sheet" note).** Per user
+   (asked, not assumed): **Export PNG = always transparent** (design cutout;
+   no sheet, no bg colour; legend band transparent too — `renderLegend` gained
+   a `sheet` option). **Export JPG = paper look**: white sheet + the visible
+   background layer's colour (JPEG has no alpha). Dead `exportBg` state
+   removed; `chartComposite(includeBg)` takes the flag. Verified
+   `scripts/exporttrans.mjs`: real downloads of both formats — .png signature
+   + corner alpha 0; .jpg signature + white corner.
+
 ## iOS-look + shapes + palette libraries pass (grilling 2026-07-09)
 LOCKED:
 1. **Icons: Framework7 Icons** (MIT, drawn to match SF Symbols) replace current
@@ -845,6 +863,26 @@ it would not bounce"): the swing must be pendulum + drape, never spring.
   full yank-release: flat ±1px from the first sample — bounce is zero.
   The ~4.6% give under an active pull is the weave narrowing (shear),
   i.e. drape, and stays — hardening it would make the panel a rigid board.
+- 2026-07-13 "remove the bounce altogether — no bounce in the real swatch":
+  defaults now REAL-SWATCH DEAD — settle 0.988→**0.96** (slider floor
+  lowered 0.98→0.94; beads-rubbing/thread friction eats a swing within one
+  motion), breeze default **0**, gravity **0.7g**, structural K_COMPRESS
+  0.6→**0.8** (a squashed fold falls open under gravity instead of springing
+  open — compressed threads storing push-back read as bounce). Measured
+  (raw-pixel probe): fling 32k→9k→6k→1k changed px over 2.7s, strictly
+  monotonic decay, no rebound spike = settling, not oscillation. A corner
+  can legitimately come to rest folded over itself (real fabric does);
+  Re-hang flat resets it.
+- 2026-07-13 "very flat and fallen drape" + user wants to self-edit: all
+  feel knobs consolidated into two commented EDIT-ME blocks —
+  **cloth.js ~83–108** (`K_STRETCH`/`K_COMPRESS` per thread kind,
+  `STRAIN_LIMIT`, `GRAB_FOLLOW`) and **App.jsx 13–17** (`DIALS` dial
+  defaults). New calm defaults: gravity 0.45→**0.6g**, breeze 0.15→**0.05**,
+  settle 0.995→**0.988**. Measured (raw canvas-pixel motion, breeze 0): a
+  hard fling decays 25k→1.2k changed px in ~4s = one-two heavy swings then
+  dead still. NOTE: screenshot-PNG byte-diff is a USELESS motion metric
+  (compression scrambles all bytes on any 1px change) — probe real pixels
+  via getImageData, as kinetic probes now do.
 
 RESTYLED 2026-07-09 (per user): the "Raw Ceramic" serif/mono editorial look is
 GONE. Kinetic UI = **Satoshi only** (sans, via Fontshare CDN), clean +

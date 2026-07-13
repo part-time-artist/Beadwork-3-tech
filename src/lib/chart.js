@@ -253,7 +253,7 @@ export function tallyColors(beads) {
 // canvas growing taller with each extra colour. That is what makes every export
 // of the same canvas pixel-identical (needed for frame-by-frame animation).
 // Omit them (PDF path) and it falls back to the old single-column auto-height.
-export function renderLegend(beads, { scale = PX_PER_MM, width, height } = {}) {
+export function renderLegend(beads, { scale = PX_PER_MM, width, height, sheet = '#FFFFFF' } = {}) {
   const tally = tallyColors(beads)
   const pad = 6 * scale
   const baseRowH = 9 * scale
@@ -266,8 +266,11 @@ export function renderLegend(beads, { scale = PX_PER_MM, width, height } = {}) {
   canvas.width = W
   canvas.height = H
   const ctx = canvas.getContext('2d')
-  ctx.fillStyle = '#FFFFFF'
-  ctx.fillRect(0, 0, W, H)
+  // sheet = the paper behind the legend; pass null for a transparent export
+  if (sheet) {
+    ctx.fillStyle = sheet
+    ctx.fillRect(0, 0, W, H)
+  }
 
   // How many rows fit per column; wrap into more columns as needed, and only if
   // the colours still don't fit the fixed band do we shrink the row height — so

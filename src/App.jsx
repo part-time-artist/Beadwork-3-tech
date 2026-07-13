@@ -913,7 +913,11 @@ export default function Home() {
       for (let col = -2; col <= 3; col++) {
         const canonCol = ((col % 2) + 2) % 2
         if (!tech.beadExists(canonCol, canonRow)) continue
-        const cx = col * geo.Px + odd * (geo.Px / 2)
+        // rowOffset is the technique's own odd-row shift: Px/2 on the staggered
+        // 3-bead weave, 0 on the aligned 1-bead grid. Hardcoding Px/2 here put
+        // the 1-bead tile's holes half a bead off its real lattice → colour
+        // showed through the WRONG holes as half-painted beads.
+        const cx = col * geo.Px + odd * geo.rowOffset
         const cy = row * geo.Py
         tech.beadOutline(holes, cx, cy, dw, dh, tech.tiltFor(canonCol, canonRow))
       }
@@ -1071,7 +1075,6 @@ export default function Home() {
 
   // ---- printed-chart settings ----
   const [printBeadMm, setPrintBeadMm] = useState(8) // fixed bead size on paper (mm)
-  const [exportBg, setExportBg] = useState('transparent') // transparent | screen
   const beadRatio = beadMM.h / beadMM.w
 
   // ---- palettes ----
@@ -3107,11 +3110,13 @@ export default function Home() {
   // Ordered draw list for the chart: bg colour (on-screen export only), then
   // visible image + bead layers in z-order, so images bake in exactly where they
   // sit on screen and the top bead wins.
-  const chartComposite = () => {
+  // includeBg: JPG exports paint the visible background colour (paper look);
+  // PNG exports leave it out — a PNG is always a transparent cutout.
+  const chartComposite = (includeBg) => {
     const out = []
     for (const l of layersRef.current) {
       if (!layerShown(l)) continue
-      if (l.type === 'bg') { if (exportBg === 'screen') out.push({ type: 'color', color: l.color }) }
+      if (l.type === 'bg') { if (includeBg) out.push({ type: 'color', color: l.color }) }
       else if (l.type === 'image') { if (l.img) out.push({ type: 'image', img: l.img, t: l.t, opacity: l.opacity }) }
       else out.push({ type: 'beads', map: l.beads })
     }
@@ -3126,6 +3131,7 @@ export default function Home() {
     // thread building the chart (a big chart is a heavy synchronous render).
     await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))
     try {
+    const jpeg = fmt === 'jpeg'
     const flat = flattenVisible()
     const chart = await renderFullChart({
       cols,
@@ -3134,7 +3140,7 @@ export default function Home() {
       tech,
       printBeadMm,
       beadRatio,
-      composite: chartComposite(),
+      composite: chartComposite(jpeg),
       srcDoc: { w: geo.width, h: geo.height }, // maps image placement → print px
       // match the on-screen packed look (same drawScale as drawScene)
       fillScale: 1 + pack * (PACKED_DRAW - 1),
@@ -3148,7 +3154,7 @@ export default function Home() {
     // whole export is byte-identical for a given canvas, whatever is drawn.
     const gap = Math.round(6 * PX_PER_MM)
     const legendH = Math.round(chart.width * 0.11)
-    const legend = renderLegend(flat, { width: chart.width, height: legendH })
+    const legend = renderLegend(flat, { width: chart.width, height: legendH, sheet: jpeg ? '#FFFFFF' : null })
     const out = document.createElement('canvas')
     // stacking chart + legend can exceed the browser canvas ceiling even when
     // the chart alone fits — past it drawing silently no-ops and the PNG saves
@@ -3162,10 +3168,12 @@ export default function Home() {
     recordCrumbRef.current?.(`export ${out.width}×${out.height}`) // crash-hunt: size of the giant off-counter export canvas
     const ctx = out.getContext('2d')
     ctx.scale(s, s)
-    // The printable chart always gets a white sheet so the bead outlines and the
-    // row/column counting scale read clearly (a transparent PNG hid the dark numbers).
-    ctx.fillStyle = '#FFFFFF'
-    ctx.fillRect(0, 0, outW, outH)
+    // JPG = the printable paper look: white sheet + the artwork's background
+    // colour. PNG = a transparent cutout (JPEG has no alpha, PNG always does).
+    if (jpeg) {
+      ctx.fillStyle = '#FFFFFF'
+      ctx.fillRect(0, 0, outW, outH)
+    }
     ctx.drawImage(chart, 0, 0)
     ctx.drawImage(legend, 0, chart.height + gap)
     // toBlob (async) instead of toDataURL: it doesn't build a giant base64
