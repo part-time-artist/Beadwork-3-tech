@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Beadwork Tool — Branding &amp; Type Context Brief</title>
+<style>
+  :root { --ink:#2e2a24; --muted:#6b6459; --line:#e4ddd0; --bg:#faf7f1; --accent:#a8523c; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI", Inter, -apple-system, system-ui, sans-serif;
+    line-height: 1.6; font-size: 16px;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 64px 32px 96px; }
+  h1 { font-size: 30px; letter-spacing: -0.01em; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-style: italic; margin: 0 0 40px; max-width: 60ch; }
+  h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--accent); margin: 44px 0 12px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  p { margin: 0 0 14px; }
+  ul { margin: 0 0 14px; padding-left: 22px; }
+  li { margin: 0 0 8px; }
+  .lead { font-size: 18px; }
+  .tags { color: var(--muted); font-size: 14px; margin-top: 8px; }
+  strong { color: var(--ink); }
+  footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 13px; font-style: italic; }
+  @media print { body { background: #fff; } main { padding: 0; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Beadwork Tool — Branding &amp; Type Context Brief</h1>
+  <p class="sub">A context document for designing brand identity, logo, and typography. Everything below describes the product, its people, and its spirit so the visual language can be built to fit.</p>
+
+  <h2>1 · In one line</h2>
+  <p class="lead">A browser-based design tool that lets textile designers draw patterns on a grid shaped like <strong>real beads</strong>, so what they draw is exactly what a Kutch artisan weaves — no distortion between sketch and finished piece.</p>
+
+  <h2>2 · What it is and the problem it solves</h2>
+  <p>Beadwork is a traditional craft from <strong>Kutch, Gujarat (India)</strong>. Artisans there weave small beads into richly patterned pieces. A design studio creates new patterns <em>for</em> these artisans and must hand over a chart the artisan can follow bead-by-bead at the loom.</p>
+  <p>The problem: designers used to draw every bead by hand (painfully slow), then switched to Photoshop — but Photoshop's pixels are <strong>square</strong>, and real beads are <strong>not</strong> (their width:height runs about 4:5, 2:3, even 1:2). A design drawn on a square grid comes out <strong>squished</strong> when actually woven; the made piece doesn't match the sketch.</p>
+  <p>The fix: this tool's grid is built from the <strong>real bead shape and the real weave geometry</strong> — a staggered, brick-offset lattice of ovals, not squares. What the designer sees on screen is true to what the loom will produce. It also gives the artisan a clearer, more faithful visual to work from.</p>
+  <p>The tool focuses on the <strong>3-bead weave technique</strong>: beads nestle in groups of one “apex” bead over two tilted “base” beads, repeated into a honeycomb-like fabric.</p>
+
+  <h2>3 · Who it's for</h2>
+  <ul>
+    <li><strong>Primary user:</strong> textile / pattern <strong>designers</strong> at a craft design studio — visually literate, detail-driven, working digitally but rooted in a handmade craft. They care intensely about <em>colour accuracy</em> because they are choosing bead colours.</li>
+    <li><strong>Ultimate beneficiary:</strong> the <strong>Kutch artisans</strong> who read the printed chart and weave the piece. The tool is a bridge of respect between digital design and traditional handwork.</li>
+    <li><strong>Context of use:</strong> a calm, focused studio workflow — long sessions choosing colours, refining motifs, exporting a printable chart. Also used on iPad.</li>
+  </ul>
+
+  <h2>4 · What the tool does</h2>
+  <ul>
+    <li>Draw, erase, and flood-fill beads on a true-to-craft oval lattice.</li>
+    <li>Choose canvas size in <strong>real centimetres</strong>; bead and row counts derive from real bead millimetres, so the design is physically accurate.</li>
+    <li>Colour palettes, saved swatches, layered designs, reference-image tracing.</li>
+    <li>A <strong>woven-texture preview</strong> that shows the real bead shapes at every zoom level.</li>
+    <li>Exports a <strong>printed colour chart</strong> — outlined beads, guide lines, edge numbers, and a colour key with per-colour bead counts — the deliverable handed to the artisan.</li>
+  </ul>
+
+  <h2>5 · Brand spirit — the feeling to capture</h2>
+  <ul>
+    <li><strong>Craft-rooted, not craft-costume.</strong> Honour Kutch heritage without clichéd “ethnic” ornament. Quiet dignity, not decoration for its own sake.</li>
+    <li><strong>Precise &amp; true.</strong> The whole reason the tool exists is <em>fidelity</em> — the design equals the made object. The brand should feel exact, trustworthy, well-measured.</li>
+    <li><strong>Calm and unobtrusive.</strong> It's a working instrument for people who stare at colour all day. It should recede and let the <em>work</em> be the hero.</li>
+    <li><strong>Handmade meets digital.</strong> A warm, human craft expressed through a clean, modern, capable tool. Bridge those two worlds.</li>
+    <li><strong>Tactile.</strong> Beads are small, round, physical, repeating. There's an inherent rhythm, grid, and modularity — beauty in repetition.</li>
+  </ul>
+  <p class="tags">Brand adjectives: <em>precise · earthy · calm · tactile · modular · honest · warm · modern-traditional.</em></p>
+
+  <h2>6 · Critical design principle (a brand differentiator)</h2>
+  <p><strong>The interface must never bias the user's perception of bead colour.</strong> Designers judge <em>bead</em> colours against the canvas, so a loud, colourful UI would distort their colour decisions. The product's UI therefore uses <strong>tone, weight, and neutrality</strong> — not saturated accent hues — to show state. This restraint is not just a UI rule; it's a brand value worth expressing in the identity: <em>the design gets out of the way of the craft.</em> A branding system that leans on one restrained accent plus neutral, muted tones aligns with this ethic.</p>
+
+  <h2>7 · Visual &amp; typographic cues to explore</h2>
+  <ul>
+    <li><strong>The grid &amp; the bead.</strong> The staggered oval lattice, the 3-bead unit (one apex + two tilted base beads), the honeycomb nestling — all strong, ownable marks. A logo could live in the geometry of the weave itself.</li>
+    <li><strong>Repetition and rhythm.</strong> Beads tile; motifs repeat. Pattern-as-identity.</li>
+    <li><strong>Colour direction:</strong> muted, earthy, natural — clays, sand, undyed thread, warm neutrals — with restrained contrast. Avoid bright / candy palettes.</li>
+    <li><strong>Typography:</strong> clean and precise, with warmth. Consider pairing a humanist / geometric sans (modern, exact tool feel) with an optional characterful display face for the wordmark that nods to craft without pastiche. It should read as <em>instrument</em>, not <em>toy</em> — legible, confident, quiet.</li>
+    <li><strong>Form language:</strong> soft, rounded, flat, light, airy; soft “glass” panels; generous space. Nothing cramped or heavy.</li>
+    <li><strong>Naming:</strong> the working name in the product is simply <strong>“Beadwork”</strong> (subtitled <em>“3-bead technique”</em>). Open to a distinctive product name that carries the Kutch craft heritage and the precision idea.</li>
+  </ul>
+
+  <h2>8 · Cultural note (handle with care)</h2>
+  <p>The craft belongs to a real community in Kutch, Gujarat. Branding should feel <strong>respectful and authentic</strong> — celebrating the tradition and the artisans, never exoticising or flattening it into generic “tribal” motifs. When in doubt, lean on the honest geometry of the actual weave rather than borrowed ornament.</p>
+
+  <footer>Prepared as design context for building the Beadwork Tool's brand identity and typography.</footer>
+</main>
+</body>
+</html>
