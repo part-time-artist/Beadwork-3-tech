@@ -67,8 +67,12 @@ must be checked against the mockup, never assumed; that was a prior failure).
   extraction via SSE median-cut with vivid mode-snap, cover sampling, index
   quantize with lattice-aware dithering). Pure, technique-parameterised.
 - **`src/PhotoImport.jsx`** — the "Import photo as beads" modal (☰ menu,
-  3-bead artworks only). Commits one bead layer per colour in a "From photo"
-  group + the source photo as a hidden reference layer — one undo step.
+  3-bead artworks only). Photos open at FIT (never silently cropped); tapping
+  the thumbnail opens crop mode (pan/zoom, Fit·Fill·Done). Commits one bead
+  layer per colour in a "From photo" group + the source photo as a hidden
+  reference layer at the exact chosen frame — one undo step. The modal is a
+  FIXED size (never resizes with the colours slider) and deliberately does
+  NOT close on outside clicks (framing work would be lost).
 - **`src/lib/store.js`** — IndexedDB wrapper for the multi-artwork gallery
   (records = whole designs) + a `meta` store (last-opened id, bead library).
 - **`src/techniques/`** — per-weave grid rules (`index.js` registry +

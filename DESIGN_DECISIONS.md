@@ -1340,6 +1340,29 @@ a compact CHIP STRIP (swatch + eye badge + count) in a fixed-height band
 under the preview, sized to hold all 16; the universal palette is a second
 fixed band (display capped at 24 swatches).
 
+IMPLEMENTED 2026-07-16 (framing v2 + fixed modal + no-dismiss; deployed,
+CDN-confirmed, bundle CdN9cj_c):
+- Engine (`src/lib/convert.js`): `sampleGrid` samples through a doc-space
+  frame `t` — centres outside the image get NO sample → empty cells;
+  `fitFrame`/`fillFrame` helpers. Unit test gained fit<fill coverage check.
+- `PhotoImport.jsx`: opens at FIT; `frame` state; crop mode = same canvas
+  drawing the photo + bounds outline + floating Fit·Fill·Done bar; drag/
+  wheel-to-cursor/2-pointer-pinch handlers (zoom clamped fit×0.25..×10);
+  ⤢ badge on the thumbnail (`data-crop-open`). Modal = fixed
+  `min(92vh,680px)` grid (preview+side over two fixed strips); chips carry
+  the old row semantics (`data-layer-row`/`data-layer-eye` kept for tests).
+- App.jsx: the hidden reference layer is placed at the user's exact frame,
+  rescaled modal-doc→editor-doc (`geo.width / frameDocW`), replacing the old
+  cover-fit — photo aligns exactly under its beads.
+- **No click-outside dismissal for THIS modal only** (user: an accidental
+  tap would lose the framing work) — Cancel/Add are the exits; comment in
+  code so it isn't "fixed" back later.
+- Verified: photoimport suite 16 checks green (fit 1,568 < fill 1,632 beads,
+  crop open/done, constant 940×680 box across slider Home/End, scrim click
+  doesn't close); perf gate 143ms convert / 119ms worst task @6× throttle;
+  zero scrollables + all chips/buttons visible on 768×1024, 1024×768,
+  820×1180. Screenshots photoimport-modal / photoimport-crop.
+
 Implementation sketch (approved for build on user's go):
 - `sampleGrid` takes a doc-space frame `t = {x, y, scale}` (image spans
   t.x..t.x+imgW·t.scale): sample sx=(cx−t.x)/t.scale; centres OUTSIDE the

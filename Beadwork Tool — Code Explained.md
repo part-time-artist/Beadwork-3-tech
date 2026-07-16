@@ -439,6 +439,58 @@ just remembers its folder's id (`groupId`) — so drawing speed is untouched.
 
 ---
 
+## 6.8 Import photo as beads (2026-07-14 → 16)
+
+The tool can now turn **any photo into a bead design**, inside the editor:
+☰ menu → *Import photo as beads* (3-bead artworks only, for now).
+
+**How the conversion works, in plain words** (`src/lib/convert.js`):
+1. **Find the photo's own colours.** The pixels are sorted into N groups of
+   similar colours (a classic method called *median cut*, tuned so that one
+   stray pixel can't hijack the grouping — a real bug we caught, where the
+   photo's most dominant colour vanished from the palette). Each group then
+   snaps to its *most common real shade* rather than an average, so the
+   palette looks like the photo instead of a washed-out version of it. The
+   groups are ranked by importance, and the **COLOURS slider (2–16)** simply
+   reveals the top N — sliding it never reshuffles your work.
+2. **One sample per bead.** The photo is read once at every real bead
+   position on the woven lattice (not on a square pixel grid), so the result
+   respects the weave before any colouring happens.
+3. **Match + dither.** Every sample takes the nearest palette colour; with
+   **dithering** on, the small errors are passed along to neighbouring beads
+   (the printing trick that makes gradients look smooth with few colours) —
+   adapted here to the honeycomb's real neighbours.
+
+**Framing — never auto-cropped.** The photo opens at **Fit**: the whole image,
+with empty beads around it where shapes don't match. Tap the little photo
+thumbnail (green ⤢ badge) to enter **crop mode**: drag to move, pinch or
+scroll to zoom, **Fit / Fill** presets, **Done**. Whatever you frame is what
+converts — and the uncovered cells simply stay empty, so a photo can sit as a
+motif inside an existing design.
+
+**What lands in the artwork** (one undo step): a **"From photo" layer group**
+with one bead layer per colour — hide or recolour a colour everywhere by
+touching its layer — plus the source photo as a **hidden reference layer**,
+placed at *exactly* the framing you chose, so it lines up under its own beads
+if you ever unhide it. Your canvas size and palettes are never touched.
+
+**The modal itself** is a fixed-size panel that never grows off-screen: the
+colour layers are compact chips in a band sized for all 16 from the start,
+so the colours slider can't resize anything. And this one modal ignores taps
+outside it — accidentally touching the background won't throw away your
+framing (Cancel is the only way out).
+
+> [!tip] Two performance lessons this feature taught us
+> The preview once froze for ~7 seconds per slider move on iPad-class speed.
+> Profiling showed the surprise: *filling* the beads cost 4 ms — *describing
+> their outline shapes* cost 831 ms. Below ~10 px a bead's oval outline is
+> invisible anyway, so tiny beads now draw as simple rectangles (one drawing
+> instruction instead of 37) — worst freeze fell to 117 ms. Second lesson: a
+> CSS override placed *before* the rule it overrides silently loses; order
+> matters as much as the rule itself.
+
+---
+
 ## 7. Where to make common changes
 
 - 3-bead weave spacing looks off → `PACK_X` / `PACK_Y` in `geometry.js`
