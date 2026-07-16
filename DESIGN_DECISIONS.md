@@ -1284,6 +1284,34 @@ lag fix):
   scripts/photoimport-modal.png shows the real bead library in the universal
   strip and 6ms conversions at 51×43.
 
+PLAN COMPLETED 2026-07-16 (remaining phases executed in one pass):
+- **Perf gate** (`scripts/photoimportperf.mjs`, 30×21cm ~15k beads, 6× CPU
+  throttle): first run FAILED with 6.9s long-tasks per slider move. Bisected
+  with temp instrumentation — path CONSTRUCTION was the cost (831ms building
+  37-pt silhouettes; all fills 4ms), and the first LOD threshold missed
+  engaging by 0.004px (bead = 6.004 preview px vs `< 6`). Preview LOD now at
+  <10px → coverage rects (1 path op/bead). Result: worst task 6,882→117ms;
+  convert 152ms. NOTE the earlier "overdraw" diagnosis was only half right —
+  the canvas cap helps memory/iPad ceiling, but construction dominated.
+- **Engine unit test** `scripts/convertengine.mjs` imports the REAL
+  `src/lib/convert.js` (dependency-free ESM): SSE-split fix, vivid mode-snap
+  exact colours, dedupe, determinism, index quantize, dither-changes-
+  assignment. (Extraction at different n is legitimately different clustering
+  — the app's stable top-N comes from extract-once-at-16 + slice.)
+- **Repo hygiene + baseline**: .gitignore'd test artifacts (*.out/err/
+  exporttest-*, scripts/*.png), sibling node_modules/dist, the 423MB
+  SF-Symbols dmg, clean-code-skills-main. Six structured commits landed the
+  ENTIRE previously-uncommitted pile (docs/assets/tests/siblings/feature).
+- **Full sweep green**: bleedtest ×2, quickshape, beadlib, convertengine (+
+  groupcheck/exporttrans/photoimport/perf-gate same day). Deployed source
+  c4d4605 → gh-pages 3615836; CDN confirmed serving index-lg6i7FPn.js.
+- **photo-to-bead/ RETIRED** (9a6e833; baseline preserved at 38c3f10) along
+  with its phototobead.mjs suite. CLAUDE.md brought current (stale PACK/tilt/
+  tools/persistence/base-path/UI facts fixed; convert/PhotoImport/store
+  documented; sibling-apps note).
+- Still open: on-device iPad check (needs the user's hands) and the
+  gallery-entry variant of photo import if ever wanted (editor-entry shipped).
+
 MODAL DESIGN PREVIEW built 2026-07-15 (in `photo-to-bead/`, awaiting user's
 design approval before porting into the main tool): the prototype now renders
 AS the "NEW ARTWORK — FROM PHOTO" modal in the main tool's exact dark
