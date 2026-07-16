@@ -34,4 +34,17 @@ yarn-error.log*
 
 # personal Obsidian vault (synced copy of the root explainer)
 Beadwork/
+
+# test-run artifacts (screenshots/logs/downloads regenerate on every run)
 scripts/*.png
+scripts/*.out
+scripts/*.err
+scripts/exporttest-*
+
+# sibling apps manage their own deps/builds (main app's are rooted above)
+node_modules/
+dist/
+
+# huge installers / third-party downloads that don't belong in history
+assets/icons/*.dmg
+clean-code-skills-main/
