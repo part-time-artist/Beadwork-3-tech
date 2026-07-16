@@ -4317,7 +4317,7 @@ export default function Home() {
       {/* Export file — pick as many artworks as you like, export them to one file */}
       {exportPick && (
         <div className="modalScrim" onClick={() => setExportPick(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
             <div className="modalTitle">EXPORT FILE</div>
             <div className="pickList">
               {[...artworks].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).map((a) => (
@@ -4525,7 +4525,7 @@ export default function Home() {
           display: flex; flex-direction: column; align-items: center; gap: 12px;
           padding: 14px 12px; background: ${T.panel}; border-radius: ${T.radius}px;
           box-shadow: 0 2px 12px rgba(0,0,0,0.22); z-index: 12;
-          max-height: 86%; overflow-y: auto; -webkit-overflow-scrolling: touch;
+          max-height: 86%; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
         }
         .railSw {
           flex-shrink: 0; width: 42px; height: 42px; border-radius: 50%; cursor: pointer;
@@ -4649,7 +4649,7 @@ export default function Home() {
         .lpImgBtn:hover { color: ${T.ink}; }
         .lpList {
           flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px;
-          overflow-y: auto; -webkit-overflow-scrolling: touch;
+          overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
         }
         /* deselected rows are a dull dark grey; the SELECTED row is bright/light */
         .lpRow {
@@ -4787,8 +4787,10 @@ export default function Home() {
           font-family: ${T.serif}; font-size: 26px; font-weight: 500;
           color: ${T.ink}; letter-spacing: 0.01em;
         }
+        /* modals never scroll (iPad rubber-band feels broken) — their content
+           is compact enough to fit; panels with unbounded lists keep scroll
+           but contain it so a swipe can't bounce the page */
         .detailsScroll {
-          flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
           display: flex; flex-direction: column; gap: 12px; padding: 16px 18px 20px;
         }
         .drawerClose {
@@ -4808,7 +4810,7 @@ export default function Home() {
           display: flex; flex-direction: column; gap: 14px; padding: 16px;
           background: ${T.bg}; border: 1px solid ${T.line};
           border-radius: ${T.radius}px; box-shadow: 0 14px 36px rgba(0,0,0,0.5);
-          overflow-y: auto; -webkit-overflow-scrolling: touch;
+          overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
           animation: popIn 0.16s ease-out;
         }
         .cpHead { display: flex; align-items: center; justify-content: space-between; }
@@ -4951,7 +4953,7 @@ export default function Home() {
           font-size: 16px; line-height: 1;
         }
         .savedList { display: flex; flex-direction: column; gap: 5px;
-          max-height: 168px; overflow-y: auto; }
+          max-height: 168px; overflow-y: auto; overscroll-behavior: contain; }
         .savedItem { display: flex; align-items: stretch; gap: 4px; }
         .savedApply {
           flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px;
@@ -4985,8 +4987,10 @@ export default function Home() {
         .primary:hover { opacity: 0.88; }
         .primary.half { flex: 1; min-width: 0; }
 
-        /* export-file picker list */
-        .pickList { display: flex; flex-direction: column; gap: 6px; max-height: 46vh; overflow-y: auto; }
+        /* export-file picker list — a wrap grid instead of a scrolling column,
+           so many artworks fit inside a non-scrolling modal */
+        .modal.wide { max-width: 720px; }
+        .pickList { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 6px; }
         .pickRow {
           display: flex; align-items: center; gap: 10px; cursor: pointer;
           background: ${T.pill}; border: 1px solid transparent; border-radius: 8px; padding: 10px 12px;
@@ -5005,6 +5009,7 @@ export default function Home() {
           align-items: center; justify-content: center; padding: 24px;
           background: rgba(51,51,50,0.5);
           backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+          overscroll-behavior: none;
         }
         .modal {
           width: 100%; max-width: 460px; display: flex; flex-direction: column; gap: 14px;
@@ -5034,7 +5039,7 @@ export default function Home() {
         /* My artworks gallery (covers the editor when not editing) */
         .galleryScrim {
           position: fixed; inset: 0; z-index: 50; display: flex;
-          align-items: flex-start; justify-content: center; overflow-y: auto;
+          align-items: flex-start; justify-content: center; overflow-y: auto; overscroll-behavior: contain;
           padding: 40px 24px; background: ${T.bg};
         }
         .galleryLoading {

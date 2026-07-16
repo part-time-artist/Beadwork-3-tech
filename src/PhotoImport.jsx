@@ -227,13 +227,14 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
           align-items: center; justify-content: center; padding: 24px;
           background: rgba(51,51,50,0.5);
           backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+          overscroll-behavior: none;
         }
         .piModal {
           width: 100%; max-width: 940px; display: flex; gap: 18px; flex-wrap: wrap;
           background: ${T.panelSolid}; border: 1px solid ${T.line};
           border-radius: ${T.radius}px; padding: 22px;
           box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-          max-height: 92vh;
+          max-height: 94vh; overflow: hidden;
         }
         .piPreview {
           flex: 1 1 420px; min-width: 280px; display: flex; align-items: center;
@@ -248,9 +249,10 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
         .piDropBig { font-size: 15px; font-weight: 600; }
         .piDropSmall { font-size: 12.5px; opacity: 0.65; }
         .piCanvas { max-width: 100%; max-height: 58vh; width: auto; height: auto; border-radius: 4px; }
+        /* the modal never scrolls (iPad rubber-band) — the layer list wraps
+           into a grid instead, so even 16 colours fit the column */
         .piSide {
-          flex: 0 1 300px; min-width: 260px; display: flex; flex-direction: column; gap: 15px;
-          max-height: 84vh; overflow-y: auto; padding-right: 2px;
+          flex: 0 1 300px; min-width: 260px; display: flex; flex-direction: column; gap: 13px;
         }
         .piTitle {
           font-family: ${T.mono}; font-size: 12px; font-weight: 700;
@@ -281,23 +283,23 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
         .piRange { width: 100%; accent-color: ${T.active}; }
         .piCheck { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-top: 8px; cursor: pointer; color: ${T.ink}; }
         .piCheck input { accent-color: ${T.accent}; }
-        .piLayers { display: flex; flex-direction: column; gap: 4px; }
+        .piLayers { display: grid; grid-template-columns: repeat(auto-fill, minmax(126px, 1fr)); gap: 4px; }
         .piRow {
-          display: flex; align-items: center; gap: 8px; padding: 6px 9px;
+          display: flex; align-items: center; gap: 5px; padding: 4px 7px;
           border-radius: ${T.radius}px; cursor: pointer;
           background: ${T.panel}; color: ${T.ink};
         }
         .piRow.on { background: ${T.active}; color: ${T.activeInk}; }
         .piEye {
-          width: 20px; height: 20px; border: none; background: none; cursor: pointer;
-          font-size: 12px; color: inherit; padding: 0;
+          width: 17px; height: 17px; border: none; background: none; cursor: pointer;
+          font-size: 11px; color: inherit; padding: 0; flex-shrink: 0;
         }
         .piSwatch {
-          width: 24px; height: 24px; padding: 0; border: 1px solid ${T.line};
+          width: 21px; height: 21px; padding: 0; border: 1px solid ${T.line};
           border-radius: 6px; cursor: pointer; flex-shrink: 0; background: none;
         }
-        .piHex { font-size: 12px; flex: 1; }
-        .piCount { font-size: 11px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+        .piHex { font-size: 10.5px; flex: 1; white-space: nowrap; }
+        .piCount { font-size: 10px; opacity: 0.75; font-variant-numeric: tabular-nums; }
         .piUni { display: flex; flex-wrap: wrap; gap: 6px; }
         .piUniSw { width: 28px; height: 28px; border-radius: 7px; border: 1px solid ${T.line}; padding: 0; }
         .piFoot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
@@ -312,6 +314,16 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
           padding: 11px; border: none; cursor: pointer;
           background: ${T.pill}; color: ${T.ink};
           border-radius: ${T.radius}px; font-size: 13px; font-family: ${T.mono};
+        }
+        /* Single-column (portrait iPad): shrink the preview so the whole
+           control column — down to the buttons — fits with NO scrolling and
+           NO clipping. MUST stay at the END of this stylesheet: it overrides
+           equal-specificity base rules above purely by cascade order. */
+        @media (max-width: 900px) {
+          .piModal { align-content: flex-start; }
+          .piPreview { flex-basis: 100%; min-height: 0; padding: 12px; }
+          .piCanvas { max-height: 22vh; }
+          .piSide { flex: 1 1 100%; }
         }
       `}</style>
     </div>
