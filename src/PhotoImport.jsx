@@ -321,8 +321,14 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
 // Preview renderer: capped to PREVIEW_MAX_PX (the prototype rendered at full
 // doc resolution — 4–16× more pixels than displayed, its main lag source),
 // batched per colour with Path2Ds FLUSHED every ~1500 beads (one giant path
-// fills super-linearly — same lesson as the PNG exporter).
+// fills super-linearly — same lesson as the PNG exporter). LEVEL OF DETAIL:
+// path CONSTRUCTION is the real cost, not pixels — bisected: at 15k beads the
+// 37-point silhouettes took 831ms to BUILD while all the fills together took
+// 4ms. Under 10 preview px a bead's silhouette barely reads anyway, so it
+// draws as a coverage rect (apex rows double-wide, same as the editor's fast
+// path): one path op per bead instead of 37.
 const FLUSH_AT = 1500
+const LOD_BEAD_PX = 10
 function renderPreview(canvas, converted, layers, cols, rows, tech) {
   if (!canvas) return
   const { geo, assigned } = converted
@@ -333,6 +339,8 @@ function renderPreview(canvas, converted, layers, cols, rows, tech) {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   ctx.save()
   ctx.scale(scale, scale)
+  const asRect = geo.Bw * scale < LOD_BEAD_PX
+  const apexWide = !!tech.apexWide
   const active = new Map()
   const flush = (hex) => {
     const a = active.get(hex)
@@ -342,6 +350,7 @@ function renderPreview(canvas, converted, layers, cols, rows, tech) {
     active.set(hex, { path: new Path2D(), count: 0 })
   }
   for (let row = 0; row < rows; row++) {
+    const wide = apexWide && row % 2 === 0
     for (let col = 0; col < cols; col++) {
       if (!tech.beadExists(col, row)) continue
       const idx = assigned.get(`${col},${row}`)
@@ -352,7 +361,11 @@ function renderPreview(canvas, converted, layers, cols, rows, tech) {
       let a = active.get(hex)
       if (!a) { a = { path: new Path2D(), count: 0 }; active.set(hex, a) }
       const { cx, cy } = geo.centerFor(col, row)
-      tech.beadOutline(a.path, cx, cy, geo.Bw, geo.Bh, tech.tiltFor(col, row))
+      if (asRect) {
+        a.path.rect(cx - (wide ? geo.Px : geo.Px / 2), cy - geo.Py / 2, wide ? geo.Px * 2 : geo.Px, geo.Py)
+      } else {
+        tech.beadOutline(a.path, cx, cy, geo.Bw, geo.Bh, tech.tiltFor(col, row))
+      }
       a.count++
       if (a.count >= FLUSH_AT) flush(hex)
     }
