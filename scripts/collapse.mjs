@@ -1,0 +1,28 @@
+import { chromium } from 'playwright-core'
+const b = await chromium.launch({ channel:'msedge', headless:true })
+const p = await b.newPage({ viewport:{ width:1366, height:1024 } })
+const errs=[]; p.on('pageerror',e=>errs.push(String(e)))
+await p.goto('http://localhost:3003/',{waitUntil:'domcontentloaded'})
+await p.evaluate(async()=>{localStorage.clear();const d=(await indexedDB.databases?.())||[];await Promise.all(d.map(x=>new Promise(r=>{const q=indexedDB.deleteDatabase(x.name);q.onsuccess=q.onerror=()=>r()})))})
+await p.reload({waitUntil:'domcontentloaded'}); await p.waitForTimeout(900)
+await p.getByRole('button',{name:/New artwork/i}).first().click(); await p.waitForTimeout(200)
+await p.getByRole('button',{name:/3.?bead/i}).first().click(); await p.waitForTimeout(250)
+await p.getByRole('button',{name:/Create artwork/i}).click(); await p.waitForTimeout(500)
+// open layers, click draw -> layers closes
+await p.getByTitle('Layers').click(); await p.waitForTimeout(150)
+const lp1 = await p.locator('.layersPanel').count()
+await p.getByTitle('Draw').click(); await p.waitForTimeout(150)
+const lpAfterTool = await p.locator('.layersPanel').count()
+// open layers, click colour -> layers closes, colour opens
+await p.getByTitle('Layers').click(); await p.waitForTimeout(150)
+await p.locator('.tbColor').click(); await p.waitForTimeout(200)
+const lpAfterColour = await p.locator('.layersPanel').count()
+const cpOpen = await p.locator('.colorPanel').count()
+// palette edit: no autofocus
+await p.locator('.cpPal.active .cpPalEdit').click(); await p.waitForTimeout(200)
+const focusedIsName = await p.evaluate(()=>document.activeElement?.classList?.contains('cpPalName')||false)
+const nameInput = await p.locator('.cpPal.active input.cpPalName.editing').count()
+console.log('layersOpen',lp1,'afterTool',lpAfterTool,'afterColour',lpAfterColour,'colourOpen',cpOpen)
+console.log('paletteNameInputPresent',nameInput,'autoFocusedName',focusedIsName)
+console.log('errors', errs.length?errs.slice(0,4).join(' | '):'none')
+await b.close()

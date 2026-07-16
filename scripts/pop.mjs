@@ -1,0 +1,25 @@
+import { chromium } from 'playwright-core'
+const b = await chromium.launch({ channel:'msedge', headless:true })
+const p = await b.newPage({ viewport:{ width:1366, height:1024 } })
+const errs=[]; p.on('pageerror',e=>errs.push(String(e)))
+p.on('console',m=>{ if(m.type()==='error'&&!/favicon/.test(m.text())) errs.push('con: '+m.text()) })
+await p.goto('http://localhost:3003/',{waitUntil:'domcontentloaded'})
+await p.evaluate(async()=>{localStorage.clear();const d=(await indexedDB.databases?.())||[];await Promise.all(d.map(x=>new Promise(r=>{const q=indexedDB.deleteDatabase(x.name);q.onsuccess=q.onerror=()=>r()})))})
+await p.reload({waitUntil:'domcontentloaded'}); await p.waitForTimeout(900)
+await p.getByRole('button',{name:/New artwork/i}).first().click(); await p.waitForTimeout(200)
+await p.getByRole('button',{name:/3.?bead/i}).first().click(); await p.waitForTimeout(250)
+await p.getByRole('button',{name:/Create artwork/i}).click(); await p.waitForTimeout(500)
+const popPresent = await p.locator('canvas.popfx').count()
+const popSize = await p.locator('canvas.popfx').evaluate(el=>({w:el.width,h:el.height}))
+const bb=await p.locator('canvas.board').boundingBox(); const cy=bb.y+bb.height/2
+await p.getByTitle('Draw').click()
+// slow stroke so trailing beads are mid-pop when we grab a frame
+await p.mouse.move(bb.x+bb.width*0.35, cy); await p.mouse.down()
+for(let i=1;i<=10;i++){ await p.mouse.move(bb.x+bb.width*0.35 + i*22, cy); await p.waitForTimeout(16) }
+// capture WHILE popping (mouse still down, no settle)
+await p.screenshot({ path:'scripts/pop-mid.png' })
+await p.mouse.up(); await p.waitForTimeout(400)
+const beadCount = await p.evaluate(()=>{ return 'ok' })
+console.log('popfxPresent', popPresent, 'popfxSize', JSON.stringify(popSize))
+console.log('errors', errs.length?errs.slice(0,4).join(' | '):'none')
+await b.close()

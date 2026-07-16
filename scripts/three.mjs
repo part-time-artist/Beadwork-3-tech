@@ -1,0 +1,27 @@
+import { chromium } from 'playwright-core'
+const b = await chromium.launch({ channel:'msedge', headless:true })
+const p = await b.newPage({ viewport:{ width:1366, height:1024 } })
+const errs=[]; p.on('pageerror',e=>errs.push(String(e)))
+p.on('console',m=>{ if(m.type()==='error'&&!/favicon/.test(m.text())) errs.push('con: '+m.text()) })
+await p.goto('http://localhost:3003/',{waitUntil:'domcontentloaded'})
+await p.evaluate(async()=>{localStorage.clear();const d=(await indexedDB.databases?.())||[];await Promise.all(d.map(x=>new Promise(r=>{const q=indexedDB.deleteDatabase(x.name);q.onsuccess=q.onerror=()=>r()})))})
+await p.reload({waitUntil:'domcontentloaded'}); await p.waitForTimeout(900)
+await p.getByRole('button',{name:/New artwork/i}).first().click(); await p.waitForTimeout(200)
+await p.getByRole('button',{name:/3.?bead/i}).first().click(); await p.waitForTimeout(250)
+await p.getByRole('button',{name:/Create artwork/i}).click(); await p.waitForTimeout(500)
+// add image via header button
+await p.getByTitle('Layers').click(); await p.waitForTimeout(200)
+const png='iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR4nGP8z8Dwn4EIwDiqEL8CAJxcA/0H6tF1AAAAAElFTkSuQmCC'
+await p.locator('.layersPanel input[type=file]').setInputFiles({name:'r.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')}); await p.waitForTimeout(500)
+const editBtns = await p.locator('.lpEditBtn').count()
+const editHasSvg = await p.locator('.lpEditBtn svg').count()
+const adjustBar = await p.locator('.adjustBar').count()
+// palette name via Edit
+await p.locator('.tbColor').click(); await p.waitForTimeout(200)
+await p.locator('.cpPal.active .cpPalEdit').click(); await p.waitForTimeout(150)
+const nameInput = await p.locator('.cpPal.active input.cpPalName.editing').count()
+const nameSpan = await p.locator('.cpPal.active span.cpPalName').count()
+console.log('lpEditBtn',editBtns,'hasSvg',editHasSvg,'adjustBarOnAdd',adjustBar)
+console.log('palNameInputWhenEditing',nameInput,'palNameSpanWhenEditing',nameSpan)
+console.log('errors', errs.length?errs.slice(0,4).join(' | '):'none')
+await b.close()
