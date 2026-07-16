@@ -28,9 +28,11 @@ npm run preview  # serve the production build locally
 
 **Stack: Vite + React 18** (migrated off the original Next 9 / React 16 fork).
 `styled-jsx` is kept via its Babel plugin (configured in `vite.config.js`) so the
-`<style jsx>` blocks port unchanged. GitHub Pages serves under the `/Beadworks`
-base path — set in `vite.config.js` (`base`). Any `next.*` / `out/` references
-are dead Etch/Next artifacts.
+`<style jsx>` blocks port unchanged. GitHub Pages serves under the
+`/Beadwork-3-tech/` base path (production only — set in `vite.config.js`); the
+live site is **https://part-time-artist.github.io/Beadwork-3-tech/** via git
+remote `newtool` — NEVER deploy to `origin` (a different site). Deploy recipe in
+DESIGN_DECISIONS "Deployment".
 
 There is **no test suite, linter, or typechecker** configured. Verification is
 visual: run `npm run dev`, open the app, and compare the rendered grid against
@@ -61,6 +63,14 @@ must be checked against the mockup, never assumed; that was a prior failure).
   polygon out, plus outline sampling and drag-to-adjust. No canvas/React.
 - **`src/icons.jsx`** — the UI icon set (Framework7 Icons path data, MIT —
   matches Apple's SF Symbols look; filled 56×56 paths, inherit currentColor).
+- **`src/lib/convert.js`** — the photo→beads conversion engine (palette
+  extraction via SSE median-cut with vivid mode-snap, cover sampling, index
+  quantize with lattice-aware dithering). Pure, technique-parameterised.
+- **`src/PhotoImport.jsx`** — the "Import photo as beads" modal (☰ menu,
+  3-bead artworks only). Commits one bead layer per colour in a "From photo"
+  group + the source photo as a hidden reference layer — one undo step.
+- **`src/lib/store.js`** — IndexedDB wrapper for the multi-artwork gallery
+  (records = whole designs) + a `meta` store (last-opened id, bead library).
 - **`src/techniques/`** — per-weave grid rules (`index.js` registry +
   `threeBead.js` / `oneBead.js`). One artwork = one technique, chosen up front.
   `App.jsx` and `chart.js` call through the **active technique** (`tech.beadExists`,
@@ -76,6 +86,11 @@ must be checked against the mockup, never assumed; that was a prior failure).
 is live; `scripts/` holds Playwright visual-check scripts (`node scripts/x.mjs`
 against a running dev server).
 
+**Sibling app**: `kinetic-lab/` is a separate Vite+React experiment (imports a
+`.beadwork.json` and drapes it as physics fabric; own `npm run dev`, port 3001).
+A former sibling, `photo-to-bead/`, was the conversion prototype — retired
+2026-07-16 after its engine moved into `src/lib/convert.js` (history: 38c3f10).
+
 ### The grid model (the heart of the tool)
 
 Beads sit on a **staggered (brick-offset) lattice of oval beads** — not a square
@@ -83,11 +98,12 @@ grid, not boxes. Everything scales from bead size, so changing the bead ratio
 rescales the whole lattice. See `BEADWORK_TOOL_SPEC.md` §4 for the measured
 values and rationale.
 
-- `makeGeometry` computes pitches from packing constants `PACK_X` (2.8) and
-  `PACK_Y` (0.7) — center-to-center spacing as a multiple of bead width/height.
-  Odd rows shift right by half the horizontal pitch (`rowOffset`). `PACK_Y < 1`
-  + half-offset is what makes beads nestle diagonally into the honeycomb weave
-  look. These constants are the **knobs to tune against the mockup.**
+- `makeGeometry` computes pitches from packing constants `PACK_X` (1.296,
+  calibrated to a real woven swatch) and `PACK_Y` (0.875) — center-to-center
+  spacing as a multiple of bead width/height. Odd rows shift right by half the
+  horizontal pitch (`rowOffset`). `PACK_Y < 1` + half-offset is what makes
+  beads nestle diagonally into the honeycomb weave look. Apex (even) rows are
+  HALF density (`beadExists`); base rows are full.
 - A bead cell is identified by `(col, row)`; the filled-bead store is a `Map`
   keyed by the string `"col,row"` (`key(c,r)`), value = color hex.
 - Two coordinate notions: **physical** (real bead mm + canvas cm → bead/row
@@ -99,33 +115,38 @@ values and rationale.
 
 ### Interaction & rendering
 
-- **Tools:** `draw`, `erase`, `fill`. Draw/erase paint single beads and support
-  drag (pointer down sets `dragging`, move repaints). One oval = one fillable
-  cell — never treat a 3-bead group as one paint unit (a prior failure, spec §5).
-- **Flood fill** walks staggered neighbors (left/right same row + 4 nestled
-  diagonals) and stops at differently-colored beads (boundary fill).
-- **`drawScene(ctx, { forExport })`** is the single render path for both the
-  on-screen canvas and PNG export. On screen it draws empty cells as thin
-  outlined ovals and a checkerboard for transparency; **export is beads-only**
-  (no outlines, no checkerboard) at 4× scale. Keep both paths going through this
-  one function.
-- **Orientation:** `uniform` (all upright) or `woven` (even rows upright =
-  apex; odd-row beads tilt ±18° by column = the two leaning base beads), via
-  `tiltFor`.
+- **Tools:** `draw`, `erase`, `select` (marquee) — plus drag-a-colour-from-
+  the-palette flood fill, QuickShape hold-to-snap, pattern maker, mirror,
+  duplicate/move. One oval = one fillable cell — never treat a 3-bead group as
+  one paint unit (a prior failure, spec §5).
+- **Flood fill** walks the technique's neighbors (`tech.floodNeighbors`) and
+  stops at differently-colored beads (boundary fill), active layer only.
+- **`drawScene`** is the on-screen render path (layers composited top-wins,
+  LOD: detailed ovals zoomed in, rects + one bead-texture pattern zoomed out);
+  the printed chart/export renders through `src/lib/chart.js`. Perf rules that
+  keep iPad alive are documented in DESIGN_DECISIONS ("Performance", the
+  crash-hunt entries) — strokes repaint via rAF from refs, never React per
+  pointer event; Path2Ds flush every ~1500 beads.
+- **Orientation is locked "woven"**: apex (even) rows horizontal, base beads
+  ±45° mirrored checkerboard, via each technique's `tiltFor`.
 
 ### Persistence
 
-No backend. Saved color palettes live in `localStorage` under
-`beadwork3_palettes_v1`; "Save artwork" persists the whole design (beads,
-canvas, palette, background) under `beadwork3_design_v1` and auto-restores it
-on load.
+No backend. **Artworks live in IndexedDB** (`src/lib/store.js`) as a
+multi-artwork gallery with auto-save and auto-reopen; `.beadwork.json`
+export/import moves designs between devices. Save format v4 = layers (bead /
+image / bg types) + layer groups. Named palettes remain in localStorage
+(`beadwork3_palettes_v1`); the universal bead library lives in the IndexedDB
+`meta` store.
 
-## UI conventions (spec §7.5 — non-negotiable)
+## UI conventions
 
-The UI must stay **muted/earthy neutral — no bright accent colors** on purpose:
-the designer judges *bead* colors on the canvas, so a colorful UI would bias
-their color perception. Active/selected states use tone/weight (darker fill,
-border, shadow), never a saturated hue. Design tokens are the `T` object at the
-top of `src/App.jsx`. The look: light, airy, rounded, flat, soft glass panels,
-inline-labeled input pills (`Pill`), one full-width primary button. A prior dark
-cramped UI was rejected — keep it Figma-clean.
+The editor is the **dark Morii "Beads-UI" Procreate-style workspace** (floating
+toolbars, brush + palette rails, floating layers panel, ☰ menu; light and dark
+themes share one token vocabulary — the `T` proxy at the top of `src/App.jsx`).
+The ORIGINAL rule still holds and is non-negotiable: **UI chrome must never
+bias bead-colour perception** — one restrained green accent (`#4a875d`), state
+shown by tone/weight, and the artboard behind beads stays light (≈`#dbdad5`)
+so colours are judged against paper-like ground. Icons come from
+`src/icons.jsx` (SF-Symbols-look). The spec §7.5 "light airy" direction was
+superseded by the Figma reskin — see DESIGN_DECISIONS "UI theme — UPDATED".
