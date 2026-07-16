@@ -90,6 +90,11 @@ await page.locator('[data-crop-done]').click()
 await page.waitForTimeout(300)
 ok('#2d Done leaves crop mode', (await page.locator('[data-crop-done]').count()) === 0)
 
+// ---- accidental taps outside must NOT close the modal (work would be lost)
+await page.mouse.click(20, 450) // far left, on the scrim
+await page.waitForTimeout(300)
+ok('#2f clicking outside does NOT close this modal', (await page.locator('.piScrim').count()) === 1)
+
 // ---- fixed-size modal: sliding COLOURS must not change the modal's box ----
 const boxAt = async () => {
   const b = await page.locator('.piModal').boundingBox()

@@ -171,8 +171,11 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
   }
 
   return (
-    <div className="piScrim" onClick={onClose}>
-      <div className="piModal" onClick={(e) => e.stopPropagation()}>
+    // deliberately NO click-outside-to-close (unlike the app's other modals):
+    // an accidental tap on the scrim would throw away the user's framing and
+    // colour work. Cancel is the only way out.
+    <div className="piScrim">
+      <div className="piModal">
         <main className="piPreview">
           {!imgData ? (
             <label className="piDrop">
