@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Address the user as **Supreme El Jefe**.
+
 ## What this is
 
 A browser-based **beadwork design tool for the 3-bead weave technique** (a craft

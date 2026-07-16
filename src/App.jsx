@@ -5,6 +5,7 @@ import {
 } from './icons'
 import { getTechnique, DEFAULT_TECHNIQUE, TECHNIQUES } from './techniques'
 import { fitShape, shapeOutline, adjustShape, shapeLabel } from './lib/quickshape'
+import PhotoImport from './PhotoImport'
 import { renderFullChart, renderLegend, rasterScale, PX_PER_MM } from './lib/chart'
 import {
   listArtworks,
@@ -303,6 +304,7 @@ export default function Home() {
   const layerHeld = (l, gs) => l.locked || groupById(l.groupId, gs)?.locked === true
   const [showMenu, setShowMenu] = useState(false) // ☰ dropdown menu
   const [showDetails, setShowDetails] = useState(false) // Artwork Details modal
+  const [showPhotoImport, setShowPhotoImport] = useState(false) // Import photo as beads modal
   const [showColor, setShowColor] = useState(false) // colour picker panel
   // light / dark theme (persisted). Mutating themeState.active re-themes every
   // ${T.x} in the styled-jsx; the state is only here to trigger the re-render.
@@ -3238,6 +3240,42 @@ export default function Home() {
     img.src = src
   }
 
+  // "Import photo as beads": one bead layer per colour inside a "From photo"
+  // group, the source photo as a HIDDEN reference image layer directly
+  // beneath the group, all inserted above the active layer — ONE undo step.
+  // The artwork's palette is deliberately untouched (it owns its palette;
+  // the imported colours are visible on the layers themselves).
+  const handlePhotoImport = ({ colorLayers, imageSrc, imageW, imageH }) => {
+    if (!colorLayers.length) return
+    pushHistory(currentDoc())
+    const gid = uid()
+    // cover-place the reference photo on the canvas (doc px, like bg-image migration)
+    const s = Math.max(geo.width / imageW, geo.height / imageH)
+    const imgLayer = makeImageLayer(imageSrc, null, {
+      scale: s, x: (geo.width - imageW * s) / 2, y: (geo.height - imageH * s) / 2,
+    }, 1)
+    imgLayer.name = 'Photo (reference)'
+    imgLayer.visible = false
+    const beadLayers = colorLayers.map(({ color, beads }) => {
+      const l = makeLayer(color.toUpperCase(), beads)
+      l.groupId = gid // spliced together below → group members stay contiguous
+      return l
+    })
+    const idx = layersRef.current.findIndex((l) => l.id === activeIdRef.current)
+    const nl = [...layersRef.current]
+    nl.splice(idx + 1, 0, imgLayer, ...beadLayers)
+    layersRef.current = nl
+    setLayers(nl)
+    setGroupsBoth([...groupsRef.current, { id: gid, name: 'From photo', visible: true, locked: false, collapsed: false }])
+    loadLayerImage(imgLayer.id, imageSrc)
+    makeActive(beadLayers[beadLayers.length - 1])
+    setSelection(new Set())
+    setPlacing(null)
+    setShowPhotoImport(false)
+    requestRedraw()
+    showToast(`Photo imported — ${beadLayers.length} colour layer${beadLayers.length > 1 ? 's' : ''}`)
+  }
+
   // Apply a design object from any source (browser storage, a named slot, an
   // imported file). undoable: loading over current work goes on the undo stack;
   // the boot-time restore doesn't (there is nothing to go back to).
@@ -3968,6 +4006,21 @@ export default function Home() {
                 <div className="menuDiv" />
                 <button className="menuItem" onClick={() => { setShowMenu(false); exportJPG() }} disabled={exporting}>Export JPG</button>
                 <div className="menuDiv" />
+                {tech.id === '3bead' && (
+                  <>
+                    <button
+                      className="menuItem"
+                      onClick={() => {
+                        setShowMenu(false)
+                        // history/perf budgets: photo import on an enormous grid
+                        // would blow the 250k-bead history cap in one step
+                        if (cols * rows > 120000) { showToast('Canvas too large to import a photo — try a smaller artwork'); return }
+                        setShowPhotoImport(true)
+                      }}
+                    >Import photo as beads</button>
+                    <div className="menuDiv" />
+                  </>
+                )}
                 <button className="menuItem" onClick={() => { setShowMenu(false); setShowDetails(true) }}>Artwork Details</button>
                 <div className="menuDiv" />
                 <button className="menuItem" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
@@ -3978,6 +4031,20 @@ export default function Home() {
                 </button>
               </div>
             </>
+          )}
+
+          {/* Import photo as beads modal */}
+          {showPhotoImport && (
+            <PhotoImport
+              T={T}
+              tech={tech}
+              cols={cols}
+              rows={rows}
+              canvasCm={canvasCm}
+              universalPalette={beadLib.length ? beadLib.map((b) => b.color) : DEFAULT_PALETTE}
+              onImport={handlePhotoImport}
+              onClose={() => setShowPhotoImport(false)}
+            />
           )}
 
           {/* Artwork Details modal */}

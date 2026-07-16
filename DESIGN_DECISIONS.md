@@ -911,3 +911,390 @@ responsiveness):
 - Verified `scripts/zoompan.mjs`: a rapid 18-step zoom burst + pan on a filled
   100×100 produced ZERO long-tasks (was ~37 × ~100ms), and the settled view is a
   crisp woven render (24.7% gap at 40% zoom), no errors.
+
+## Photo → beadwork prototype (grilling 2026-07-13)
+LOCKED:
+1. **Standalone prototype, not integrated yet.** Built as `photo-to-bead/`, a
+   sibling Vite+React app (same pattern as `kinetic-lab/` — own package.json,
+   own dev server, no changes to the main tool). If the conversion look/quality
+   holds up, it migrates into the main app as a real feature in a later pass.
+2. **Palette: reduce to the current palette.** Every pixel is matched to the
+   NEAREST colour in a user-supplied palette (reuses the same 8-colour Morii
+   default as the main tool) — guarantees the result only uses beads the
+   studio actually stocks. (Deferred: extracting fresh colours from the photo
+   — not built this pass.)
+3. **Resolution: a slider**, independent of any fixed canvas size (this is a
+   standalone prototype with no "current artwork"). Controls how many bead
+   columns the image is sampled into; rows follow from the image aspect ratio
+   and the real bead pitch ratio (`PACK_Y`/`PACK_X` from `geometry.js`) so a
+   square photo doesn't come out stretched.
+4. **Dithering ON by default** (Floyd–Steinberg error diffusion) — smooth
+   gradients/skin tones read far better in an 8-colour palette than flat
+   nearest-match. A toggle turns it off for a flatter, more graphic result.
+5. **Real 3-bead lattice**, not a placeholder square grid. Reuses
+   `src/lib/geometry.js` (`makeGeometry`, `beadExists`) and
+   `src/techniques/threeBead.js` (`beadOutline`, `tiltFor`) directly — so the
+   preview is pixel-accurate to what the main tool would render, and the
+   sampling grid (which (col,row) cells exist) matches the real half-density
+   apex rows, not a naive rectangle.
+6. **Output: preview + adjust only, no export this pass.** Upload a photo →
+   live-updating canvas of the converted result as sliders change (bead
+   columns, dithering on/off, palette). Proves the algorithm/look before any
+   export or save-to-artwork plumbing is built.
+Defaults taken (change if wrong): palette editable inline (add/remove/edit
+hex, same swatch UI language as the main tool); conversion runs on a Web
+Worker or is debounced so dragging the resolution slider doesn't freeze the
+tab on a large photo; max sample resolution capped (e.g. 120 columns) to keep
+every slider drag fast without a "processing…" spinner.
+
+IMPLEMENTED 2026-07-13 (`photo-to-bead/`):
+- Scaffolded as a sibling Vite+React app (port 3002, falls through to the next
+  free port if busy), left UNCOMMITTED to git for now — same as `kinetic-lab/`,
+  which was also built but never `git add`ed. Copied (not imported/symlinked)
+  `src/lib/geometry.js` and `src/techniques/{threeBead,defineTechnique}.js`
+  verbatim into `photo-to-bead/src/…` so the prototype starts byte-identical
+  to the real lattice math with zero build-config coupling to the main app.
+- `src/lib/convert.js` (pure, no React/canvas): `colsRowsFor` derives row
+  count from the image's own aspect ratio × the real Px/Py pitch ratio so a
+  square photo isn't stretched; `sampleGrid` samples the source image once per
+  EXISTING lattice cell (skips apex gaps, not a raster scan); `quantizeGrid`
+  nearest-matches each sample to the palette and, with dithering on, diffuses
+  the quantization error via `threeBead.floodNeighbors` filtered to the
+  "forward" 3 of its 6 neighbours (right + the two nestled diagonals in the
+  row below) — the honeycomb equivalent of classic Floyd–Steinberg, since the
+  staggered/half-density lattice has no plain "row below" to diffuse into.
+- **Perf bug found + fixed during build**: `renderBeads` originally batched
+  ALL beads of a colour into ONE Path2D before a single `ctx.fill()` — the
+  exact anti-pattern already documented and fixed once in the main app's PNG
+  exporter (see "fast PNG export" above: "append degrades super-linearly").
+  Measured here: 2,370 beads rendered in 227ms, but 9,600 beads (4× more)
+  took 3,625ms (16× slower) — a real tab freeze on the resolution slider's
+  top end. Fixed with the same proven pattern: flush each colour's Path2D
+  (fill + start fresh) every 1,500 beads. Max-resolution (120 cols, 9,600
+  beads) now completes in ~570–680ms end-to-end, no freeze.
+- Verified `scripts/phototobead.mjs` against a synthetic test photo (a radial
+  gradient + three flat colour blocks) driven through a live dev server: the
+  canvas renders through the real non-square staggered lattice (not a
+  placeholder grid), the resolution slider changes bead count and stays fast
+  at max resolution, the dithering toggle visibly changes the result (546 vs
+  508 unique rendered colours on the same source), no runtime errors.
+  Screenshots `scripts/p2b-dither.png` / `p2b-nodither.png` show the expected
+  contrast: dithered = smooth speckled gradient, flat = posterized bands.
+
+UI restyle 2026-07-14 (per user): the prototype's chrome is now **strictly
+black & white** — white ground, black primary button, black slider/checkbox
+(`accentColor`), grey ONLY as hairlines + muted text (same rule as the
+project report) — and **every corner radius is 8px** (`R = 8` token: upload
+button, swatches, remove/add buttons, source thumbnail, canvas frame). The
+bead PREVIEW keeps real colours — it's the artwork, not chrome. User
+confirmed the tool "works so well" on their own photo (2026-07-14);
+functional suite re-run green after the restyle.
+
+## Photo → bead v2 (grilling 2026-07-14)
+LOCKED:
+1. **Colour control = Illustrator Image Trace style, NOT Photoshop threshold**
+   (user's words: "we need something like image trace in illustrator so we can
+   divide colours and boundaries to increase or decrease the number of colours
+   I want in the artwork"). A **COLOURS slider (2–16)** controls how many
+   colour regions the photo is reduced to — more = finer boundaries, fewer =
+   flatter, more graphic shapes.
+2. **Palette is EXTRACTED from the photo itself** (median-cut quantization) —
+   supersedes the v1 fixed/manually-edited palette. (This was deferred in the
+   v1 grilling; now built.)
+3. **Universal palette available for swaps**: the Morii stock colours are shown
+   as a strip; tap a layer, then a universal swatch to swap that layer's colour.
+   (The prototype hardcodes the main tool's 8-colour seed — the real library
+   lives in the main app's IndexedDB, unreachable from another origin/port.)
+4. **Each colour = a layer** with **show/hide** (eye) and **swap colour**
+   (free picker on the row + the universal strip). Per-layer bead counts shown.
+5. **Assignment is STABLE under swaps**: beads are matched to the ORIGINAL
+   extracted colours (cluster identity); a layer's display colour can change
+   freely without reshuffling which beads belong to it. Dithering error also
+   diffuses against the extracted colours for the same reason.
+6. **Future scope (user-stated)**: this tool will be integrated into the main
+   iPad tool itself, so photo conversions become editable artworks for
+   exploration/experimentation.
+
+IMPLEMENTED 2026-07-14 (`photo-to-bead/`):
+- `extractPalette` (convert.js): median-cut over ≤24k sampled pixels →
+  n colours; splits the box with the widest channel range at its median.
+  Near-identical results are DEDUPED (<~8/channel) — splitting a flat colour
+  yields identical averages that showed as duplicate layers (two #C0392B rows,
+  one with 0 beads) before the dedupe; the artwork now honestly reports fewer
+  colours when the photo has fewer.
+- `quantizeGrid` now returns palette INDICES, not hex — the bead→cluster
+  assignment is the durable thing; display colour resolves through the layer.
+- App state: `colorCount` (slider 2–16) → effect A extracts + resets layers;
+  effect B samples+assigns against `extracted` (stable under swaps); effect C
+  paints only — so eye toggles and colour swaps re-render without
+  re-quantizing. Per-layer bead counts computed in effect B.
+- UI: COLOURS slider under RESOLUTION ("Fewer = bolder shapes · more = finer
+  detail"); COLOUR LAYERS list (eye ●/○, colour input, hex, count, row select
+  = swap target); UNIVERSAL PALETTE strip (tap layer → tap swatch). Sliders
+  carry aria-labels ("Resolution"/"Colours") — the test suite needs them now
+  that there are two range inputs.
+- Verified `scripts/phototobead.mjs` (12 checks): extraction → 6 deduped
+  layers on the synthetic photo, colours slider Home → 2 layers, eye toggle
+  drops opaque px 4.33M → 1.98M, universal swap paints #006E54 (1.68M px),
+  max-res still ~700ms, no errors. Screenshots p2b-dither / p2b-2colours /
+  p2b-swapped.
+
+Photo → bead v3 (same day, per user request — asked before building, since
+"threshold" had been corrected once already):
+1. **Drag & drop**: drop an image anywhere on the window to load it (dashed
+   full-window overlay while dragging; enter/leave counted so it can't
+   flicker; non-image files ignored). Upload button stays.
+2. **THRESHOLD slider = noise smoothing** (user chose "boundary smoothing /
+   noise", the Image-Trace Noise idea — NOT a luminance cutout): 0–6 passes
+   of a majority filter over the real lattice adjacency (floodNeighbors);
+   each bead takes the most common colour among itself + neighbours, own
+   colour weighted 1.5 so ties never flip. Specks melt first, boundaries
+   simplify with more passes. Runs after quantize (`smoothAssignment` in
+   convert.js) so it composes with dithering.
+3. **SIZE section**: segmented "Fit to photo" (the resolution slider, grid
+   follows the photo's aspect) vs **"Canvas (cm)"** — W×H cm inputs (clamped
+   1–30 cm for live speed) + 1mm/3mm bead segmented, cols/rows derived via
+   the shared `beadCountFromCm` exactly like the main tool; the photo FILLS
+   the canvas (centred crop — `sampleGrid` gained a 'cover' fit mode).
+   Integration-ready sizing.
+- Verified (suite now 15 checks): drop event loads a new photo (thumbnail
+  blob URL changes), cm mode reshapes the grid to ≈10:7 aspect, threshold max
+  visibly flattens dithered speckle into bold regions (screenshots p2b-cm =
+  speckled vs p2b-smooth = clean flat shapes — the Image-Trace look), all
+  prior checks still green, no errors.
+
+## Photo → bead v4 (grilling 2026-07-14)
+LOCKED:
+1. **THRESHOLD slider REMOVED** (user: "useless"). Supersedes the v3 noise-
+   smoothing decision; `smoothAssignment` deleted, not hidden.
+2. **Extraction = vivid TRUE colours**, not cluster averages: each cluster
+   snaps to its most-common real pixel colour, so the palette looks like the
+   photo (averages greyed the mid-tones out).
+3. **Slider = stable ranked top-N.** Extract ONCE per image at 16 colours,
+   ranked by importance (cluster population); the slider reveals the top N.
+   Sliding down removes the least-important colour, sliding up adds it back —
+   the palette never reshuffles and layer swaps/hides SURVIVE slider moves
+   (supersedes v2's live re-extract, which reset layers on every move).
+4. **Range stays 2–16**; everything else (dithering, colour layers,
+   universal swap, drag & drop, Fit/Canvas-cm size modes) unchanged.
+
+IMPLEMENTED 2026-07-14 (`photo-to-bead/`):
+- Threshold slider + `smoothAssignment` deleted (UI, state, engine, test).
+- **Vivid extraction**: each median-cut cluster snaps to its most-common real
+  colour (pixels binned at 5 bits/channel, fullest bin wins, bin's own pixels
+  averaged) instead of the cluster average. On the test image the palette now
+  surfaces the photo's EXACT flat colours (#2980b9 blue never even survived
+  averaging before).
+- **Bug found via the standalone repro `scripts/extractdebug.mjs`**: median
+  cut chose the box to split by largest channel RANGE, which one stray pixel
+  in a flat box inflates — the split budget was burned halving a flat block
+  into 1-px crumbs (3000→1500→…→1) while a 12k-sample gradient+blue box
+  survived 15 splits, and the image's DOMINANT dark green vanished from the
+  palette entirely. Fix: split by largest **sum-of-squared-error** (variance ×
+  population), which outliers can't inflate. Same image now yields 12 honest
+  colours with the dark green ranked FIRST.
+- **Stable ranked top-N**: extraction runs ONCE per image at 16 colours,
+  boxes ranked by population; the slider slices the top N (`activeN`).
+  Layer state (swaps/hides) lives on the full ranked list, so slider moves
+  never reset it; a selection above N goes inert rather than dangling.
+  Effect A now depends only on the image; N feeds effect B (quantize).
+- Ranking trade-off, accepted: at very low N the top clusters by population
+  can be similar shades (the test image's two biggest are both greens) —
+  stability was chosen over per-N re-clustering optimality, knowingly.
+- Verified (suite now 16 checks, all green): exact flat colours in the layer
+  list (#6b), swaps SURVIVE slider up/down (#9b — the headline), hide-layer
+  drop proportional to the layer's own bead share, threshold gone (#12),
+  max-res ~650ms. Two test bugs fixed en route (brittle layer-0-share
+  assumption; total-beads regex matching the "N beads wide" slider label).
+
+## Photo → bead INTEGRATION into the main tool (grilling 2026-07-15)
+LOCKED:
+1. **Output = one bead layer per extracted colour**, all inside one layer
+   group (the main tool's real layers/groups), each named by its colour —
+   hide/recolour/experiment per colour exactly like the prototype.
+2. **3-bead only at launch**; the 1-bead grid follows in a later pass.
+3. **The source photo travels into the artwork as a HIDDEN image layer**
+   (existing reference-image feature) for later comparison/tracing.
+Defaults taken (stated, unobjected): conversion engine (`convert.js`) moves
+into the main app's `src/lib/` as the single source of truth; the universal
+strip reads the REAL IndexedDB bead library; conversion dialog keeps
+prototype control parity (colours slider, dithering, Fit/cm size); the new
+artwork's palette is seeded with the final layer colours.
+
+## Deferred
+- **Entry point** — gallery "New artwork from photo" flow vs editor
+  import-onto-current-canvas vs both. User wants to think about it. Does NOT
+  block Phase 1 (engine port + conversion dialog) — both entries share those.
+
+## Integration + performance PLAN (2026-07-15 — plan only, nothing built yet)
+
+### Diagnosed causes of the prototype's lag (from code review, to verify by measurement in P0)
+1. **Preview canvas massively oversized.** `renderBeads` renders at full doc
+   resolution (Bw=20px/bead): 10×7cm ≈ 1910×1350px, 20×15cm ≈ 7.6M px,
+   30cm ≈ 17M px — while DISPLAYED at ~450px wide. Every slider tick repaints
+   4–16× more pixels than anyone can see. Biggest single win: cap the preview
+   canvas to display-ish resolution (≤ ~1400px wide / ≤4M px, DPR-aware —
+   also dodges iPad Safari's silent canvas ceiling).
+2. **No level-of-detail.** Every bead is a 37-point superellipse path
+   (~350k lineTo at 9.6k beads). The MAIN APP already solved this exact
+   problem: rects + ONE bead-texture pattern overlay at small bead sizes
+   (drawScene LOD + `beadTexture`). The preview must reuse that, not repaint
+   ovals.
+3. **Short debounce + synchronous pipeline.** 90ms debounce with a
+   200–700ms synchronous convert+render → typing "20" in a cm field can queue
+   two full conversions back-to-back on the main thread.
+Fix order: (1)+(2) first, re-measure; Web Worker for sample+quantize is the
+fallback ONLY if still >250ms on 6× throttle (don't build unneeded machinery).
+
+### Architecture (clean-code rules)
+- **Engine → `src/lib/convert.js`** (main app): extractPalette (SSE median cut
+  + mode-snap + ranked + dedupe), sampleGrid (cover), quantizeGrid (indices).
+  Pure functions, `tech` passed as a parameter (1-bead ready later, 3-bead
+  shipped). DELETE `colsRowsFor` + fit-mode leftovers (dead once cm-native).
+- **Modal → its own component file** (e.g. `src/PhotoConvert.jsx`), styled-jsx
+  like the rest — NOT more lines in the 5,000-line App.jsx. Props:
+  open / universal palette (the REAL bead library state App already holds) /
+  onCreate(designPieces) / onBack. Owns all conversion state internally.
+- **Commit path (onCreate)** builds through EXISTING plumbing only:
+  bg layer + hidden image layer (source photo via the existing ≤2400px
+  downscale/JPEG path, cover-placed) + one bead layer per colour (named by
+  hex) inside ONE group ("From photo") + palette seeded with the top-8
+  most-populous layer colours (palettes cap at 8 — default taken) +
+  canvasCm/beadMM/technique from the modal → new artwork record via the
+  existing createArtwork/putArtwork path. No new save-format changes (v4
+  groups already cover it).
+- **Preview renderer**: reuse the main app's LOD/texture approach — shared,
+  not re-implemented.
+
+### Phases
+- **P0 — Fix the lag IN the prototype + trash removal + git baseline.**
+  Cap preview px, LOD/texture render, debounce 150ms; perf script asserting
+  convert+paint <250ms and colours-slider drag produces zero >200ms
+  long-tasks at 30cm/1mm under 6× CPU throttle. Delete dead code (unused
+  imports/consts, fit-mode remnants), delete scripts/*.out + one-off debug
+  scripts (uistate), prune stale screenshots, .gitignore *.out, THEN commit
+  photo-to-bead + pending main-app files as the baseline.
+- **P1 — Engine port** into `src/lib/convert.js` + engine test in main
+  scripts/ (port the extractdebug assertions properly).
+- **P2 — PhotoConvert.jsx** (the approved modal design), universal strip
+  reading the live bead library; temporarily reachable behind a dev-only
+  button until the entry point is decided.
+- **P3 — onCreate commit path** + full-flow browser test (photo → artwork
+  with N colour layers in a group + hidden reference photo + seeded palette).
+- **P4 — Entry point wiring** (BLOCKED on the deferred gallery-vs-editor
+  decision) + on-device iPad check.
+- **P5 — Full regression sweep** (bleedtest ×2 techniques, quickshape,
+  beadlib, groupcheck, exporttrans, perf100, zoompan, drawundo) + deploy to
+  newtool gh-pages + decide photo-to-bead/'s fate (retire vs keep as lab).
+
+### Open asks for the user (not blocking P0–P3)
+1. ~~Entry point~~ RESOLVED 2026-07-16 — see below.
+2. Any SPECIFIC lags/bugs seen in the MAIN app to add to the sweep — the
+   sweep covers known surfaces, but reports beat guessing. (Still open.)
+
+## Integration — technical plan LOCKED (grilling 2026-07-16)
+1. **Entry point = EDITOR import** (user chose over the recommended gallery
+   flow): ☰ menu → "Import photo as beads…" converts a photo INTO the open
+   artwork as a layer group. 3-bead artworks only for now (menu item hidden
+   on 1-bead; engine takes `tech` so 1-bead follows later).
+2. **Rebuild depth = additive + targeted**: engine + modal arrive as new
+   clean modules; App.jsx touched only at wiring points. ONE targeted
+   extraction allowed because it's true reuse: the bead-texture TILE BUILDER
+   moves out of App.jsx into `src/lib/texture.js` so drawScene and the
+   import preview share one implementation (guarded by beadtex/texzoom
+   regression scripts). The full App.jsx decomposition is a separate later
+   project.
+3. **Prototype fate = retire**: `photo-to-bead/` is deleted once the in-tool
+   version passes the full suite (git history keeps it recoverable).
+
+### Design deltas vs the approved modal (consequences of editor entry)
+- Canvas-size inputs, bead-size segmented and "Match photo shape" are GONE —
+  the artwork's canvas already exists; the modal shows it read-only
+  ("10 × 7 cm · 73 × 61 beads"). Photo cover-crops onto that grid.
+- Primary button: CREATE ARTWORK → **ADD TO ARTWORK**.
+- Commit = **one undo step**: group "From photo" (one bead layer per colour,
+  named by hex) inserted above the active layer; the source photo as a
+  HIDDEN image layer directly beneath the group (image layers can't join
+  groups — flatten guards them, v4).
+- Palette NOT touched on import (changes the earlier gallery-flow default of
+  seeding — an existing artwork owns its palette; layer colours are visible
+  in the layers panel anyway).
+- Guard: block import with a toast if the artwork's grid exceeds ~120k beads
+  (history/perf budgets; canvases that big are rare).
+
+### Module map (additive)
+- `src/lib/convert.js` — engine port: extractPalette (SSE median cut +
+  mode-snap + ranked + dedupe), sampleGrid (cover), quantizeGrid (indices);
+  `tech` as parameter; `colsRowsFor`/fit-mode leftovers DELETED.
+- `src/lib/texture.js` — the extracted bead-texture tile builder (shared).
+- `src/PhotoImport.jsx` — the modal component (approved design minus size
+  controls), styled-jsx, owns all conversion state; props: open, tech, geo/
+  cols/rows (target grid), universalPalette (live library), onImport, onClose.
+- `src/App.jsx` — wiring only (~small): menu item, modal mount, onImport
+  handler building layers/group/image through EXISTING plumbing.
+- `scripts/convertengine.mjs` — engine unit checks (extractdebug assertions,
+  properly homed). `scripts/photoimport.mjs` — full-flow browser test.
+
+### Preview de-lag architecture (P0, proven in the prototype first)
+1. **Cap the preview canvas** to ≤ ~1.2M px (≈1280 wide), draw through one
+   ctx.scale — kills the 4–16× overdraw.
+2. **LOD**: bead-on-preview < ~6px → rects + ONE texture-tile pattern fill
+   (the shared `lib/texture.js`), else the batched oval paths. Never >2k
+   ovals per paint.
+3. Pipeline stays split (extract / assign / paint) so eye-toggles and swaps
+   repaint only; debounce 90→150ms; a rAF yield before heavy work so the
+   controls never freeze mid-drag.
+4. **Budget (must pass before porting)**: convert+paint < 250ms and zero
+   >200ms long-tasks while dragging COLOURS, at a 30 cm / 1 mm grid under
+   6× CPU throttle. Web Worker ONLY if this fails after 1–3.
+
+### Phases (final)
+- **P0** prototype de-lag to budget + trash removal (dead code, *.out logs,
+  uistate.mjs, .gitignore) + `assets/icons/SF-Symbols-8.dmg` gitignored
+  (installer, likely huge) + **git baseline commit** of all pending work.
+- **P1** engine port + texture extraction + convertengine test; beadtex/
+  texzoom/perf100 re-run to prove drawScene unharmed.
+- **P2** PhotoImport.jsx + ☰ menu wiring (3-bead only).
+- **P3** commit path (group + layers + hidden photo, one undo) +
+  photoimport.mjs full-flow test.
+- **P4** on-device iPad check + FULL regression sweep + deploy to newtool.
+- **P5** delete `photo-to-bead/` + CLAUDE.md/docs updates.
+
+IMPLEMENTED 2026-07-16 — the incorporation itself (user: "first just
+incorporate the photo modal in the tool and lets test"; P1+P2+P3 in one pass,
+P0's full de-lag deferred but the PREVIEW CAP shipped now since it's the main
+lag fix):
+- `src/lib/convert.js` — engine ported, `tech` parameterised (guards
+  techniques with <6 flood neighbours, so 1-bead is engine-ready).
+- `src/PhotoImport.jsx` — the modal as its own component (approved design,
+  editor variant: read-only canvas info, ADD TO ARTWORK). Preview canvas
+  capped at 1.2M px via ctx.scale (kills the 4–16× overdraw); photo decoded
+  once to a ≤1400px JPEG data URL that doubles as the stored reference-layer
+  src; debounces 120/150ms. Hidden-in-modal colours stay OUT of the commit.
+- App.jsx wiring: ☰ "Import photo as beads" (3-bead artworks only; >120k-bead
+  canvases blocked with a toast), `handlePhotoImport` = ONE undo step
+  inserting hidden reference image layer + per-colour bead layers (contiguous,
+  named by hex) + "From photo" group above the active layer; topmost colour
+  layer becomes active; palette untouched.
+- Verified `scripts/photoimport.mjs` (11 checks, all green first run): menu →
+  modal → convert (8 layers extracted) → hide one colour → commit lands 7
+  layers + hidden "Photo (reference)" + group; canvas visibly painted; ONE
+  undo removes everything, redo restores; autosave persists across reload; no
+  errors. Regression: groupcheck + exporttrans re-run green. Modal screenshot
+  scripts/photoimport-modal.png shows the real bead library in the universal
+  strip and 6ms conversions at 51×43.
+
+MODAL DESIGN PREVIEW built 2026-07-15 (in `photo-to-bead/`, awaiting user's
+design approval before porting into the main tool): the prototype now renders
+AS the "NEW ARTWORK — FROM PHOTO" modal in the main tool's exact dark
+language — DARK tokens copied verbatim, Morii Lipi via the same fonts.css,
+modal anatomy/primary/segmented/pill styles matching the "Canvas & beads"
+dialog, light-artboard preview so bead colours judge true, layer rows styled
+like the real layers panel (active row = light). Design simplification taken
+(flagged to user): the Fit-to-photo/Canvas-cm mode switch is GONE — the modal
+is cm-native (artworks are physical) with a one-tap "Match photo shape" link
+that sets cm H from the photo's aspect. CREATE ARTWORK/Back are present but
+toast-only until integration. Suite updated + green (16 checks): #4 drives
+the cm W pill instead of the removed resolution slider; #11 verifies Match
+photo shape (20cm × 4:3 photo → H=15cm). Screenshots scripts/modal-empty.png
+/ modal-loaded.png.
