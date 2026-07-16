@@ -65,6 +65,51 @@ const nRows = await page.locator('.piScrim [data-layer-row]').count()
 ok('#2 photo converts with extracted colour layers', nRows >= 4 && nRows <= 8, `${nRows} layers`)
 await page.screenshot({ path: 'scripts/photoimport-modal.png' })
 
+// ---- v2 framing: opens at FIT (whole photo, partial coverage); crop mode
+// via the thumbnail; Fill covers everything ------------------------------
+const STATS_PI = /([\d,]+)\s*beads\s*·\s*\d+\s*ms/
+const readBeads = async () => parseInt(((await page.locator('.piScrim').innerText()).match(STATS_PI) || [])[1].replace(/,/g, ''), 10)
+const beadsFit = await readBeads()
+await page.locator('[data-crop-open]').click()
+await page.waitForTimeout(300)
+ok('#2b thumbnail opens crop mode', (await page.locator('[data-crop-done]').count()) === 1)
+await page.screenshot({ path: 'scripts/photoimport-crop.png' })
+await page.locator('[data-crop-fill]').click()
+await page.waitForFunction(
+  (prev) => {
+    const m = document.querySelector('.piScrim')?.innerText.match(/([\d,]+)\s*beads\s*·\s*\d+\s*ms/)
+    return m && parseInt(m[1].replace(/,/g, ''), 10) > prev
+  },
+  beadsFit,
+  { timeout: 8000 }
+)
+const beadsFill = await readBeads()
+ok('#2c Fit shows the whole photo (fewer beads than Fill)', beadsFill > beadsFit,
+  `fit ${beadsFit} < fill ${beadsFill}`)
+await page.locator('[data-crop-done]').click()
+await page.waitForTimeout(300)
+ok('#2d Done leaves crop mode', (await page.locator('[data-crop-done]').count()) === 0)
+
+// ---- fixed-size modal: sliding COLOURS must not change the modal's box ----
+const boxAt = async () => {
+  const b = await page.locator('.piModal').boundingBox()
+  return `${Math.round(b.width)}x${Math.round(b.height)}`
+}
+const boxBefore = await boxAt()
+const colSliderEl = page.locator('.piScrim input[aria-label="Colours"]')
+await colSliderEl.focus()
+await page.keyboard.press('End')
+await page.waitForTimeout(700)
+const boxMax = await boxAt()
+await page.keyboard.press('Home')
+await page.waitForTimeout(700)
+const boxMin = await boxAt()
+ok('#2e modal size constant across the colours slider', boxBefore === boxMax && boxMax === boxMin,
+  `${boxBefore} / ${boxMax} / ${boxMin}`)
+// restore the default count for the rest of the flow
+for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowRight')
+await page.waitForTimeout(700)
+
 // hide one colour before committing — hidden layers must stay OUT of the artwork
 await page.locator('.piScrim [data-layer-row]').nth(0).locator('[data-layer-eye]').click()
 await page.waitForTimeout(400)

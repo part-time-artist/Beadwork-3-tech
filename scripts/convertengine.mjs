@@ -7,7 +7,7 @@
 //  · population ranking + near-dupe dedupe
 //  · quantize returns palette INDICES; dithering changes assignment
 // Run: node scripts/convertengine.mjs
-import { extractPalette, sampleGrid, quantizeGrid } from '../src/lib/convert.js'
+import { extractPalette, sampleGrid, quantizeGrid, fitFrame, fillFrame } from '../src/lib/convert.js'
 
 const results = []
 const ok = (name, cond, extra = '') => { results.push(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? ' — ' + extra : ''}`); if (!cond) process.exitCode = 1 }
@@ -73,10 +73,15 @@ const geo = {
   height: 25 * 0.75 * 2 + (rows - 1) * Py,
   centerFor: (col, row) => ({ cx: 15 + col * Px + (row % 2) * (Px / 2), cy: 18.75 + row * Py }),
 }
-const sampled = sampleGrid(data, W, H, geo, cols, rows, tech)
+const sampled = sampleGrid(data, W, H, geo, cols, rows, tech, fillFrame(W, H, geo))
 ok('#6 sampling covers only existing lattice cells',
   [...sampled.keys()].every((k) => { const [c, r] = k.split(',').map(Number); return tech.beadExists(c, r) }) && sampled.size > 1500,
   `${sampled.size} samples`)
+// Fit frame on a mismatched aspect: the whole photo shows, so FEWER cells
+// sample (the uncovered ones stay empty) — never a silent crop or stretch
+const fitted = sampleGrid(data, W, H, geo, cols, rows, tech, fitFrame(W, H, geo))
+ok('#6b fit frame leaves uncovered cells empty', fitted.size > 0 && fitted.size < sampled.size,
+  `fit ${fitted.size} < fill ${sampled.size}`)
 
 const top8 = pal.slice(0, 8)
 const flat = quantizeGrid(sampled, cols, rows, top8, false, tech)

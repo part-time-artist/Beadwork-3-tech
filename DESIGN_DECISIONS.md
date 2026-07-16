@@ -1312,6 +1312,47 @@ PLAN COMPLETED 2026-07-16 (remaining phases executed in one pass):
 - Still open: on-device iPad check (needs the user's hands) and the
   gallery-entry variant of photo import if ever wanted (editor-entry shipped).
 
+## Photo-import fitting v2 (grilling 2026-07-16) — replaces silent auto-crop
+LOCKED:
+1. **Fit first, reframe by hand.** The modal opens showing the WHOLE photo
+   (Fit — nothing lost, empty beads around it), then drag = pan and
+   pinch/wheel = zoom to frame exactly what's wanted; **Fit** and **Fill**
+   one-tap presets. (Replaces the current silent centred cover-crop.)
+2. **Canvas rules; photo adapts.** The artwork's cm size is never touched by
+   an import — the photo is framed INTO the existing canvas.
+3. **Uncovered cells stay EMPTY** — the imported colour layers simply hold no
+   beads there, so the photo becomes a placed motif and existing artwork
+   shows through. (No auto background-fill layer.)
+Defaults taken: gestures mirror the existing image-layer Adjust (drag/pinch,
+wheel-zoom toward cursor, zoom clamped); live re-conversion while framing
+(debounced); a faint outline marks the photo's bounds while it's smaller than
+the canvas; the hidden reference layer is committed at the SAME doc-space
+transform used for sampling, so photo and beads stay perfectly aligned.
+
+SUPERSEDED 2026-07-16 (user, after testing): framing gestures do NOT live on
+the bead preview — **tapping the photo THUMBNAIL (beside "Replace photo")
+opens a dedicated CROP MODE** in the preview area: the photo itself with
+drag-pan / pinch-or-wheel-zoom, Fit · Fill presets, Done. Beads reconvert on
+Done (and on preset taps), not per drag-frame. Additional locked requirement:
+**the modal has a FIXED on-screen size** — it must never grow off-screen and
+never change size as the COLOURS slider moves. Redesign: colour layers become
+a compact CHIP STRIP (swatch + eye badge + count) in a fixed-height band
+under the preview, sized to hold all 16; the universal palette is a second
+fixed band (display capped at 24 swatches).
+
+Implementation sketch (approved for build on user's go):
+- `sampleGrid` takes a doc-space frame `t = {x, y, scale}` (image spans
+  t.x..t.x+imgW·t.scale): sample sx=(cx−t.x)/t.scale; centres OUTSIDE the
+  image produce NO sample → cell excluded → empty (dither already skips
+  missing neighbours). Fit = min-scale centred (t computed, not special-cased);
+  Fill = max-scale centred.
+- PhotoImport: `frame` state (reset to Fit per photo), pointer/pinch/wheel
+  handlers on the preview, Fit/Fill buttons, Add disabled when nothing lands.
+- Commit passes the same `t` (converted to canvas doc px) to the hidden
+  reference layer.
+- Tests: fit shows whole photo + partial bead coverage, drag/Fill change the
+  result, reference-layer alignment, perf gate re-run.
+
 MODAL DESIGN PREVIEW built 2026-07-15 (in `photo-to-bead/`, awaiting user's
 design approval before porting into the main tool): the prototype now renders
 AS the "NEW ARTWORK — FROM PHOTO" modal in the main tool's exact dark

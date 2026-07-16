@@ -81,20 +81,31 @@ export function extractPalette(data, w, h, n) {
   return out.map(rgbToHex)
 }
 
-// Sample the source image at every EXISTING lattice cell (skips apex gaps).
-// The image keeps its aspect and covers the canvas: the largest centred crop
-// matching the canvas shape is sampled, one read per bead centre.
-export function sampleGrid(imgData, imgW, imgH, geo, cols, rows, tech) {
+// Frames for placing a photo on the canvas, in DOC space: the image spans
+// t.x .. t.x + imgW·t.scale. fitFrame shows the WHOLE photo centred (empty
+// cells around it — nothing lost); fillFrame covers the canvas (edges crop).
+export function fitFrame(imgW, imgH, geo) {
+  const s = Math.min(geo.width / imgW, geo.height / imgH)
+  return { scale: s, x: (geo.width - imgW * s) / 2, y: (geo.height - imgH * s) / 2 }
+}
+export function fillFrame(imgW, imgH, geo) {
+  const s = Math.max(geo.width / imgW, geo.height / imgH)
+  return { scale: s, x: (geo.width - imgW * s) / 2, y: (geo.height - imgH * s) / 2 }
+}
+
+// Sample the source image at every EXISTING lattice cell (skips apex gaps),
+// through the doc-space frame `t`. Bead centres that land OUTSIDE the image
+// produce NO sample — those cells stay empty, so a Fit-framed photo becomes
+// a placed motif rather than a stretched or cropped one.
+export function sampleGrid(imgData, imgW, imgH, geo, cols, rows, tech, t) {
   const sampled = new Map()
-  const W = geo.width
-  const H = geo.height
-  const k = Math.min(imgW / W, imgH / H)
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
       if (!tech.beadExists(col, row)) continue
       const { cx, cy } = geo.centerFor(col, row)
-      const sx = Math.min(imgW - 1, Math.max(0, Math.round(imgW / 2 + (cx - W / 2) * k)))
-      const sy = Math.min(imgH - 1, Math.max(0, Math.round(imgH / 2 + (cy - H / 2) * k)))
+      const sx = Math.round((cx - t.x) / t.scale)
+      const sy = Math.round((cy - t.y) / t.scale)
+      if (sx < 0 || sx >= imgW || sy < 0 || sy >= imgH) continue
       const i = (sy * imgW + sx) * 4
       sampled.set(key(col, row), [imgData[i], imgData[i + 1], imgData[i + 2]])
     }

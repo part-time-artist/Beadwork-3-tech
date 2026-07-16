@@ -3245,14 +3245,16 @@ export default function Home() {
   // beneath the group, all inserted above the active layer — ONE undo step.
   // The artwork's palette is deliberately untouched (it owns its palette;
   // the imported colours are visible on the layers themselves).
-  const handlePhotoImport = ({ colorLayers, imageSrc, imageW, imageH }) => {
+  const handlePhotoImport = ({ colorLayers, imageSrc, frame, frameDocW }) => {
     if (!colorLayers.length) return
     pushHistory(currentDoc())
     const gid = uid()
-    // cover-place the reference photo on the canvas (doc px, like bg-image migration)
-    const s = Math.max(geo.width / imageW, geo.height / imageH)
+    // place the reference photo at the EXACT frame the user chose in the
+    // modal — its doc space (Bw=20) rescales into the editor's doc space, so
+    // the hidden photo sits perfectly under its own beads
+    const r = geo.width / frameDocW
     const imgLayer = makeImageLayer(imageSrc, null, {
-      scale: s, x: (geo.width - imageW * s) / 2, y: (geo.height - imageH * s) / 2,
+      scale: frame.scale * r, x: frame.x * r, y: frame.y * r,
     }, 1)
     imgLayer.name = 'Photo (reference)'
     imgLayer.visible = false
