@@ -106,6 +106,51 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
   const setLayerColor = (i, hex) =>
     setLayers((ls) => ls.map((l, j) => (j === i ? { ...l, color: hex } : l)))
 
+  // Universal swatch: tap = recolour the SELECTED chip; DRAG one onto any
+  // chip to recolour that layer directly (a floating ghost follows the
+  // pointer; the hovered chip highlights). Pointer-based — HTML5 DnD is
+  // dead on iOS.
+  const [dragSw, setDragSw] = useState(null) // {color, x, y}
+  const [dragOver, setDragOver] = useState(null) // chip index under the drag
+  const chipUnder = (x, y) => {
+    const el = document.elementFromPoint(x, y)
+    const chip = el && el.closest('[data-layer-row]')
+    return chip ? +chip.dataset.chipIndex : null
+  }
+  const swatchDown = (c, e) => {
+    if (e.button != null && e.button !== 0) return
+    const sx = e.clientX, sy = e.clientY
+    let dragging = false
+    const move = (ev) => {
+      if (!dragging && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 6) dragging = true
+      if (dragging) {
+        setDragSw({ color: c, x: ev.clientX, y: ev.clientY })
+        setDragOver(chipUnder(ev.clientX, ev.clientY))
+      }
+    }
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
+      setDragSw(null)
+      setDragOver(null)
+      if (dragging) {
+        const i = chipUnder(ev.clientX, ev.clientY)
+        if (i != null) { setLayerColor(i, c); setSelLayer(i) }
+      } else if (sel != null) setLayerColor(sel, c) // plain tap keeps the old flow
+    }
+    const cancel = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
+      setDragSw(null)
+      setDragOver(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', cancel)
+  }
+
   // ---- crop-mode gestures: drag = pan, wheel = zoom to cursor, 2-pointer pinch
   const pointers = useRef(new Map())
   const clampScale = (s) => {
@@ -266,17 +311,21 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
               <div
                 key={i}
                 data-layer-row
-                className={`piChip ${sel === i ? 'on' : ''} ${l.visible ? '' : 'off'}`}
+                data-chip-index={i}
+                className={`piChip ${sel === i ? 'on' : ''} ${l.visible ? '' : 'off'} ${dragOver === i ? 'drop' : ''}`}
                 onClick={() => setSelLayer(i)}
                 title={`${l.color.toUpperCase()} · ${converted?.counts[i]?.toLocaleString() ?? '…'} beads`}
               >
                 <span className="piChipSwatchWrap">
+                  {/* first tap SELECTS the chip (the swatch is most of its touch
+                      area); tapping the already-selected chip's swatch opens
+                      the native colour picker to fine-tune */}
                   <input
                     type="color"
                     className="piChipSwatch"
                     value={l.color}
                     onChange={(e) => setLayerColor(i, e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); if (sel !== i) { e.preventDefault(); setSelLayer(i) } }}
                   />
                   <button
                     data-layer-eye
@@ -295,7 +344,9 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
           <div className="piStripLabel">Universal<br />palette</div>
           <div className="piUniBody">
             <div className="piSoft">
-              {sel == null ? 'Tap a layer chip, then a colour here to swap it.' : `Tap a colour to recolour layer ${sel + 1}.`}
+              {sel == null
+                ? 'Drag a colour onto a layer chip to swap it — or tap a chip first, then a colour.'
+                : `Tap a colour to recolour layer ${sel + 1}, or drag one onto any chip.`}
             </div>
             <div className="piUni">
               {universalPalette.slice(0, UNIVERSAL_SHOWN).map((c) => (
@@ -304,14 +355,19 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
                   data-universal-swatch
                   title={c}
                   className="piUniSw"
-                  style={{ background: c, cursor: sel != null ? 'pointer' : 'default', opacity: sel != null ? 1 : 0.55 }}
-                  onClick={() => { if (sel != null) setLayerColor(sel, c) }}
+                  style={{ background: c }}
+                  onPointerDown={(e) => swatchDown(c, e)}
                 />
               ))}
             </div>
           </div>
         </div>
       </div>
+
+      {/* floating swatch that follows the pointer while dragging a colour */}
+      {dragSw && (
+        <div className="piDragGhost" style={{ left: dragSw.x, top: dragSw.y, background: dragSw.color }} />
+      )}
 
       <style jsx>{`
         .piScrim {
@@ -354,7 +410,7 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
         }
         .piCropHint { font-size: 11px; color: ${T.inkSoft}; }
         .piCropBar button {
-          border: none; cursor: pointer; border-radius: 7px; padding: 7px 12px;
+          border: none; cursor: pointer; border-radius: 7px; padding: 11px 16px;
           background: ${T.pill}; color: ${T.ink}; font-size: 12px; font-weight: 600; font-family: ${T.mono};
         }
         .piCropBar button.done { background: ${T.accent}; color: #fff; }
@@ -406,16 +462,17 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
         }
         .piPrimary:disabled { opacity: 0.5; cursor: default; }
         .piGhost {
-          padding: 10px; border: none; cursor: pointer;
+          padding: 12px; border: none; cursor: pointer;
           background: ${T.pill}; color: ${T.ink};
           border-radius: ${T.radius}px; font-size: 13px; font-family: ${T.mono};
         }
-        /* fixed-height strips under preview+side, spanning the modal */
+        /* fixed-height strips under preview+side, spanning the modal.
+           Heights sized for the BIGGER touch targets (~44px effective). */
         .piStrip {
           grid-column: 1 / -1; display: flex; gap: 12px; align-items: flex-start;
-          height: 64px; overflow: hidden;
+          height: 72px; overflow: hidden;
         }
-        .piStrip.uni { height: 46px; }
+        .piStrip.uni { height: 104px; }
         .piStripLabel {
           font-family: ${T.mono}; font-size: 10px; font-weight: 700; line-height: 1.35;
           letter-spacing: 0.1em; text-transform: uppercase; color: ${T.inkSoft};
@@ -424,27 +481,37 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
         .piChips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
         .piChip {
           display: flex; flex-direction: column; align-items: center; gap: 2px;
-          cursor: pointer; padding: 3px 4px 2px; border-radius: ${T.radius}px;
+          cursor: pointer; padding: 4px 4px 3px; border-radius: ${T.radius}px;
           background: ${T.panel}; border: 1px solid transparent;
         }
         .piChip.on { background: ${T.active}; border-color: ${T.active}; }
         .piChip.on .piChipCount { color: ${T.activeInk}; }
         .piChip.off { opacity: 0.45; }
+        .piChip.drop { border-color: ${T.accent}; background: ${T.hoverPill}; transform: scale(1.08); }
         .piChipSwatchWrap { position: relative; line-height: 0; }
+        /* 34px: finger-sized AND 16 chips still fit one row in the fixed box */
         .piChipSwatch {
-          width: 30px; height: 30px; padding: 0; border: 1px solid ${T.line};
-          border-radius: 7px; cursor: pointer; background: none;
+          width: 34px; height: 34px; padding: 0; border: 1px solid ${T.line};
+          border-radius: 8px; cursor: pointer; background: none;
         }
         .piChipEye {
-          position: absolute; right: -7px; top: -7px; width: 17px; height: 17px;
-          border: none; border-radius: 6px; background: ${T.panelSolid}; color: ${T.ink};
-          font-size: 9px; cursor: pointer; padding: 0; line-height: 17px;
+          position: absolute; right: -8px; top: -8px; width: 21px; height: 21px;
+          border: none; border-radius: 7px; background: ${T.panelSolid}; color: ${T.ink};
+          font-size: 11px; cursor: pointer; padding: 0; line-height: 21px;
           box-shadow: 0 1px 4px rgba(0,0,0,0.4);
         }
-        .piChipCount { font-size: 9px; color: ${T.inkSoft}; font-variant-numeric: tabular-nums; }
-        .piUniBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-        .piUni { display: flex; flex-wrap: wrap; gap: 5px; }
-        .piUniSw { width: 22px; height: 22px; border-radius: 6px; border: 1px solid ${T.line}; padding: 0; }
+        .piChipCount { font-size: 10px; color: ${T.inkSoft}; font-variant-numeric: tabular-nums; }
+        .piUniBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+        .piUni { display: flex; flex-wrap: wrap; gap: 6px; }
+        .piUniSw {
+          width: 36px; height: 36px; border-radius: 8px; border: 1px solid ${T.line};
+          padding: 0; cursor: pointer; touch-action: none;
+        }
+        .piDragGhost {
+          position: fixed; z-index: 70; width: 40px; height: 40px; border-radius: 10px;
+          transform: translate(-50%, -70%); pointer-events: none;
+          border: 2px solid #ffffff; box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+        }
         /* Portrait / narrow: single column, preview shrinks, strips reserve
            two rows. MUST stay LAST — overrides equal-specificity rules above
            purely by cascade order. */
@@ -456,8 +523,8 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
           }
           .piPreview { min-height: 140px; }
           .piSide { order: 1; }
-          .piStrip { order: 2; height: 118px; }
-          .piStrip.uni { order: 3; height: 72px; }
+          .piStrip { order: 2; height: 128px; }
+          .piStrip.uni { order: 3; height: 108px; }
         }
       `}</style>
     </div>

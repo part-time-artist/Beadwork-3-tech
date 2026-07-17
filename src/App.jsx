@@ -165,20 +165,6 @@ function docToScreen(dx, dy, v) {
   return { x: v.scale * (c * dx - s * dy) + v.tx, y: v.scale * (s * dx + c * dy) + v.ty }
 }
 
-// short "last edited" label for the gallery
-function timeAgo(ts) {
-  if (!ts) return '—'
-  const s = Math.floor((Date.now() - ts) / 1000)
-  if (s < 60) return 'just now'
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m} min ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h} hr ago`
-  const d = Math.floor(h / 24)
-  if (d < 7) return `${d} day${d > 1 ? 's' : ''} ago`
-  return new Date(ts).toLocaleDateString()
-}
-
 // Fully "packed" view: filled beads are DRAWN this much larger than their true
 // size, so neighbouring beads press together the way real woven beads do and a
 // motif reads as continuous fabric instead of scattered dots. The spacing slider
@@ -1039,41 +1025,70 @@ export default function Home() {
     reader.readAsDataURL(file)
   }
 
-  // Layer-row gesture: quick tap = select; hold-and-drag = reorder the stack;
-  // long-press (still) = add a reference image onto that layer. Row height (px)
-  // maps a drag distance to how many stack positions to move.
+  // Layer-row gesture (Procreate-style): plain swipe SCROLLS the list (rows
+  // allow pan-y; a slide before the hold completes hands the gesture to the
+  // browser) — press-and-HOLD ~400ms lifts the row, then dragging reorders.
+  // Quick tap = select; a second tap within 350ms = rename inline. Row height
+  // (px) maps a drag distance to how many stack positions to move.
   const LAYER_ROW_H = 72
-  // Layer-row gesture: quick tap = select; hold-and-drag = reorder the stack.
-  // (Adding an image is the photo button in the Layers header — easier than a hold.)
-  // Shared hold-drag for panel rows: tap = onTap, drag = onDrop(steps) where
-  // steps counts DISPLAY rows moved (down positive).
   const rowDrag = (e, dragId, onTap, onDrop) => {
     if (e.button != null && e.button !== 0) return
+    const startX = e.clientX
     const startY = e.clientY
-    let moved = false
-    const move = (ev) => {
-      const dy = ev.clientY - startY
-      if (!moved && Math.abs(dy) > 6) moved = true
-      if (moved) setLayerDrag({ id: dragId, dy })
-    }
-    const up = (ev) => {
+    let lifted = false
+    const blockScroll = (ev) => ev.preventDefault() // once lifted, moves reorder — never scroll
+    const holdTimer = setTimeout(() => {
+      lifted = true
+      setLayerDrag({ id: dragId, dy: 0 })
+      window.addEventListener('touchmove', blockScroll, { passive: false })
+    }, 400)
+    const cleanup = () => {
+      clearTimeout(holdTimer)
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
-      window.removeEventListener('pointercancel', up)
-      if (moved) {
+      window.removeEventListener('pointercancel', cancel)
+      window.removeEventListener('touchmove', blockScroll)
+    }
+    const move = (ev) => {
+      if (!lifted) {
+        // slid before the hold finished → it's a scroll; let the browser have it
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 8) cleanup()
+        return
+      }
+      setLayerDrag({ id: dragId, dy: ev.clientY - startY })
+    }
+    const up = (ev) => {
+      cleanup()
+      if (lifted) {
         const steps = Math.round((ev.clientY - startY) / LAYER_ROW_H)
         if (steps) onDrop(steps)
         setLayerDrag(null)
       } else onTap()
     }
+    const cancel = () => { cleanup(); if (lifted) setLayerDrag(null) }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
-    window.addEventListener('pointercancel', up)
+    window.addEventListener('pointercancel', cancel)
+  }
+  // double-tap detection (dblclick doesn't fire for touch on iOS Safari)
+  const [renamingId, setRenamingId] = useState(null) // layer id or "g:<groupId>"
+  const lastTapRef = useRef({ id: null, t: 0 })
+  const tapOrRename = (id, canRename, onSingle) => {
+    const now = performance.now()
+    if (canRename && lastTapRef.current.id === id && now - lastTapRef.current.t < 350) {
+      lastTapRef.current = { id: null, t: 0 }
+      setRenamingId(id)
+    } else {
+      lastTapRef.current = { id, t: now }
+      onSingle()
+    }
   }
   const onLayerRowDown = (e, l) =>
-    rowDrag(e, l.id, () => switchLayer(l.id), (steps) => dropLayerAt(l.id, steps))
+    rowDrag(e, l.id, () => tapOrRename(l.id, l.type !== 'bg', () => switchLayer(l.id)),
+      (steps) => dropLayerAt(l.id, steps))
   const onGroupRowDown = (e, g) =>
-    rowDrag(e, `g:${g.id}`, () => toggleGroupCollapsed(g.id), (steps) => dropGroupAt(g.id, steps))
+    rowDrag(e, `g:${g.id}`, () => tapOrRename(`g:${g.id}`, true, () => toggleGroupCollapsed(g.id)),
+      (steps) => dropGroupAt(g.id, steps))
 
   // ---- printed-chart settings ----
   const [printBeadMm, setPrintBeadMm] = useState(8) // fixed bead size on paper (mm)
@@ -3217,6 +3232,39 @@ export default function Home() {
   const [artworks, setArtworks] = useState([]) // lightweight gallery summaries
   const [currentArtworkId, setCurrentArtworkId] = useState(null)
 
+  // Gallery card actions (Procreate-style): long-press a card (or right-click
+  // on desktop) → floating Rename/Duplicate/Delete menu. Tap opens.
+  const [artMenu, setArtMenu] = useState(null) // {id, name, x, y}
+  const pressTimer = useRef(0)
+  const pressPt = useRef(null)
+  const pressFired = useRef(false) // suppress the click that follows a long-press
+  const openArtMenu = (a, x, y) => {
+    const MW = 190, MH = 178
+    setArtMenu({
+      id: a.id, name: a.name,
+      x: Math.max(8, Math.min(x, window.innerWidth - MW - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - MH - 8)),
+    })
+  }
+  const cardPressDown = (a, e) => {
+    if (e.button === 2) return // right-click goes through onContextMenu
+    pressPt.current = { x: e.clientX, y: e.clientY }
+    pressFired.current = false
+    clearTimeout(pressTimer.current)
+    pressTimer.current = setTimeout(() => {
+      pressFired.current = true
+      if (pressPt.current) openArtMenu(a, pressPt.current.x, pressPt.current.y)
+    }, 450)
+  }
+  const cardPressMove = (e) => {
+    if (pressPt.current && Math.hypot(e.clientX - pressPt.current.x, e.clientY - pressPt.current.y) > 10) cardPressEnd()
+  }
+  const cardPressEnd = () => { clearTimeout(pressTimer.current); pressPt.current = null }
+  const cardClick = (a) => {
+    if (pressFired.current) { pressFired.current = false; return }
+    openArtwork(a.id)
+  }
+
   // one design = one plain object: this is what every save path (quick-save,
   // named slot, exported file) writes and what applyDesign reads back
   const designData = () => ({
@@ -3231,6 +3279,78 @@ export default function Home() {
     }),
     activeIndex: Math.max(0, layersRef.current.findIndex((l) => l.id === activeIdRef.current)),
   })
+
+  // One layer's beads as flat coverage rects (the zoomed-out LOD look) at
+  // scale s — shared by the gallery thumbnail and the layer-row minis.
+  const paintBeadRects = (ctx, beadsMap, s) => {
+    const apexWide = !!tech.apexWide
+    for (const [k, color] of beadsMap) {
+      const i = k.indexOf(',')
+      const col = +k.slice(0, i), row = +k.slice(i + 1)
+      const { cx, cy } = geo.centerFor(col, row)
+      const wide = apexWide && row % 2 === 0
+      if (ctx.fillStyle !== color) ctx.fillStyle = color
+      ctx.fillRect((cx - (wide ? geo.Px : geo.Px / 2)) * s, (cy - geo.Py / 2) * s,
+        (wide ? geo.Px * 2 : geo.Px) * s, geo.Py * s)
+    }
+  }
+
+  // Mini live thumbnails for the layers panel (Procreate-style): each bead
+  // layer renders its own beads on a transparent tile, refreshed after edits
+  // settle and only while the panel is open. O(beads) per refresh.
+  const [layerThumbs, setLayerThumbs] = useState({})
+  useEffect(() => {
+    if (!showLayers) return
+    const t = setTimeout(() => {
+      const s = 112 / Math.max(geo.width, geo.height)
+      const w = Math.max(1, Math.round(geo.width * s))
+      const h = Math.max(1, Math.round(geo.height * s))
+      const next = {}
+      for (const l of layersRef.current) {
+        if (l.type !== 'bead' || !l.beads || !l.beads.size) continue
+        const cv = document.createElement('canvas')
+        cv.width = w
+        cv.height = h
+        paintBeadRects(cv.getContext('2d'), l.beads, s)
+        next[l.id] = cv.toDataURL('image/png')
+      }
+      setLayerThumbs(next)
+    }, 350)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showLayers, layers, beads, geo])
+
+  // Gallery thumbnail: the whole artboard at ~480px, visible layers drawn
+  // bottom→top as flat coverage rects (the zoomed-out LOD look) on the bg
+  // colour; hidden layers/groups excluded. O(beads), runs only inside the
+  // debounced save. Transparent where the bg layer is hidden — the card's
+  // paper tile shows through.
+  const makeThumb = () => {
+    try {
+      const s = 480 / Math.max(geo.width, geo.height)
+      const cv = document.createElement('canvas')
+      cv.width = Math.max(1, Math.round(geo.width * s))
+      cv.height = Math.max(1, Math.round(geo.height * s))
+      const ctx = cv.getContext('2d')
+      for (const l of layersRef.current) {
+        if (!layerShown(l, groupsRef.current)) continue
+        if (l.type === 'bg') {
+          ctx.fillStyle = l.color || '#FFFFFF'
+          ctx.fillRect(0, 0, cv.width, cv.height)
+        } else if (l.type === 'image') {
+          if (!l.img || !l.t) continue
+          ctx.globalAlpha = l.opacity ?? 1
+          ctx.drawImage(l.img, l.t.x * s, l.t.y * s, l.img.width * l.t.scale * s, l.img.height * l.t.scale * s)
+          ctx.globalAlpha = 1
+        } else if (l.beads && l.beads.size) {
+          paintBeadRects(ctx, l.beads, s)
+        }
+      }
+      return cv.toDataURL('image/png')
+    } catch {
+      return null
+    }
+  }
 
   // Load an image (data URL) into an existing image layer once it decodes.
   const loadLayerImage = (id, src) => {
@@ -3403,6 +3523,7 @@ export default function Home() {
       technique: t.label,
       beads: (rec.layers || []).reduce((n, l) => n + (l.beads ? l.beads.length : 0), 0),
       updatedAt: rec.updatedAt || 0,
+      thumb: rec.thumb || null,
     }
   }
 
@@ -3588,7 +3709,7 @@ export default function Home() {
     const total = layersRef.current.reduce((n, l) => n + (l.beads ? l.beads.size : 0), 0)
     const delay = total > 40000 ? 4000 : total > 15000 ? 1800 : 600
     saveTimer.current = setTimeout(() => {
-      const rec = { id: currentArtworkId, updatedAt: Date.now(), ...designData() }
+      const rec = { id: currentArtworkId, updatedAt: Date.now(), thumb: makeThumb(), ...designData() }
       putArtwork(rec)
         .then(() => setArtworks((a) => a.map((x) => (x.id === rec.id ? summarize(rec) : x))))
         .catch(() => {})
@@ -3601,7 +3722,7 @@ export default function Home() {
   // confirmation reassures the user their work is safe.
   const saveNow = () => {
     if (!currentArtworkId) { showToast('Saved'); return }
-    const rec = { id: currentArtworkId, updatedAt: Date.now(), ...designData() }
+    const rec = { id: currentArtworkId, updatedAt: Date.now(), thumb: makeThumb(), ...designData() }
     putArtwork(rec)
       .then(() => { setArtworks((a) => a.map((x) => (x.id === rec.id ? summarize(rec) : x))); showToast('Saved') })
       .catch(() => showToast('Save failed — try again'))
@@ -3867,15 +3988,20 @@ export default function Home() {
                         onPointerDown={(e) => onGroupRowDown(e, g)}
                       >
                         <span className={`lpChevron ${g.collapsed ? '' : 'open'}`}>▸</span>
-                        <span
-                          className="lpName"
-                          onDoubleClick={(e) => {
-                            e.stopPropagation()
-                            const n = window.prompt('Rename group:', g.name)
-                            if (n !== null && n.trim()) renameGroup(g.id, n.trim())
-                          }}
-                          title="Tap to open/close · double-tap to rename"
-                        >{g.name} <span className="lpGroupCount">({row.count})</span></span>
+                        {renamingId === `g:${g.id}` ? (
+                          <input
+                            className="lpNameEdit"
+                            autoFocus
+                            defaultValue={g.name}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setRenamingId(null) }}
+                            onBlur={(e) => { const n = e.target.value.trim(); if (n) renameGroup(g.id, n); setRenamingId(null) }}
+                          />
+                        ) : (
+                          <span className="lpName" title="Tap to open/close · double-tap to rename">
+                            {g.name} <span className="lpGroupCount">({row.count})</span>
+                          </span>
+                        )}
                         <button
                           className="lpEditBtn"
                           onPointerDown={(e) => e.stopPropagation()}
@@ -3919,9 +4045,22 @@ export default function Home() {
                       ) : l.type === 'image' && l.src ? (
                         <span className="lpThumb"><img src={l.src} alt="" /></span>
                       ) : (
-                        <span className="lpThumb" />
+                        <span className="lpThumb lpThumbArt">
+                          {layerThumbs[l.id] && <img src={layerThumbs[l.id]} alt="" />}
+                        </span>
                       )}
-                      <span className="lpName">{l.name}</span>
+                      {renamingId === l.id ? (
+                        <input
+                          className="lpNameEdit"
+                          autoFocus
+                          defaultValue={l.name}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setRenamingId(null) }}
+                          onBlur={(e) => { const n = e.target.value.trim(); if (n) updateLayer(l.id, { name: n }); setRenamingId(null) }}
+                        />
+                      ) : (
+                        <span className="lpName" title={l.type === 'bg' ? undefined : 'Double-tap to rename'}>{l.name}</span>
+                      )}
                       {l.type === 'image' && (
                         <button
                           className={`lpEditBtn ${l.id === adjustId ? 'on' : ''}`}
@@ -4226,21 +4365,28 @@ export default function Home() {
               {artworks.length === 0 ? (
                 <div className="galleryEmpty">No artworks yet.</div>
               ) : (
-                <div className="galleryList">
+                <div className="galleryGrid">
                   {[...artworks]
                     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
                     .map((a) => (
-                      <div className="artRow" key={a.id}>
-                        <button className="artOpen" onClick={() => openArtwork(a.id)} title="Open">
-                          <span className="artName">{a.name}</span>
-                          <span className="artMeta">{a.technique} · {a.beads} beads · {timeAgo(a.updatedAt)}</span>
-                        </button>
-                        <div className="artActions">
-                          <button onClick={() => { const n = window.prompt('Rename artwork:', a.name); if (n !== null) renameArtwork(a.id, n) }}>Rename</button>
-                          <button onClick={() => duplicateArtwork(a.id)}>Duplicate</button>
-                          <button className="del" onClick={() => removeArtwork(a.id)}>Delete</button>
-                        </div>
-                      </div>
+                      <button
+                        className="artCard"
+                        key={a.id}
+                        title={a.name}
+                        onClick={() => cardClick(a)}
+                        onPointerDown={(e) => cardPressDown(a, e)}
+                        onPointerMove={cardPressMove}
+                        onPointerUp={cardPressEnd}
+                        onPointerCancel={cardPressEnd}
+                        onContextMenu={(e) => { e.preventDefault(); openArtMenu(a, e.clientX, e.clientY) }}
+                      >
+                        <span className="artThumb">
+                          {a.thumb
+                            ? <img src={a.thumb} alt="" draggable={false} />
+                            : <span className="artBlank">{(a.name || '?').slice(0, 1)}</span>}
+                        </span>
+                        <span className="artName">{a.name}</span>
+                      </button>
                     ))}
                 </div>
               )}
@@ -4255,6 +4401,21 @@ export default function Home() {
                   />
                 </label>
                 <button className="ghost half" onClick={() => setExportPick(new Set())} disabled={!artworks.length}>Export file</button>
+              </div>
+            </div>
+          )}
+          {/* long-press / right-click card menu */}
+          {artMenu && (
+            <div
+              className="artMenuScrim"
+              onClick={() => setArtMenu(null)}
+              onContextMenu={(e) => { e.preventDefault(); setArtMenu(null) }}
+            >
+              <div className="artMenu" style={{ left: artMenu.x, top: artMenu.y }} onClick={(e) => e.stopPropagation()}>
+                <div className="artMenuName">{artMenu.name}</div>
+                <button onClick={() => { setArtMenu(null); const n = window.prompt('Rename artwork:', artMenu.name); if (n !== null) renameArtwork(artMenu.id, n) }}>Rename</button>
+                <button onClick={() => { setArtMenu(null); duplicateArtwork(artMenu.id) }}>Duplicate</button>
+                <button className="del" onClick={() => { setArtMenu(null); removeArtwork(artMenu.id) }}>Delete</button>
               </div>
             </div>
           )}
@@ -4657,7 +4818,8 @@ export default function Home() {
         .lpRow {
           flex-shrink: 0; display: flex; align-items: center; gap: 12px;
           height: 64px; padding: 0 14px 0 8px; border-radius: 8px; cursor: pointer;
-          background: ${T.rowBg}; touch-action: none; -webkit-touch-callout: none;
+          /* pan-y: a plain swipe scrolls the list; reorder needs the hold-to-lift */
+          background: ${T.rowBg}; touch-action: pan-y; -webkit-touch-callout: none;
           -webkit-user-select: none; user-select: none;
         }
         .lpRow.active { background: ${T.rowActive}; }
@@ -4671,6 +4833,9 @@ export default function Home() {
           display: flex; align-items: center; justify-content: center;
         }
         .lpThumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        /* bead-layer minis sit on the light artboard ground so colours judge true */
+        .lpThumbArt { background: ${T.artboard}; }
+        .lpThumbArt img { object-fit: contain; }
         .lpThumbColor { cursor: pointer; }
         .lpThumbColor::-webkit-color-swatch-wrapper { padding: 0; }
         .lpThumbColor::-webkit-color-swatch { border: none; border-radius: 6px; }
@@ -4680,6 +4845,11 @@ export default function Home() {
           color: ${T.rowInk}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .lpRow.active .lpName { color: ${T.rowActiveInk}; }
+        .lpNameEdit {
+          flex: 1; min-width: 0; font-family: ${T.mono}; font-size: 17px;
+          color: ${T.ink}; background: ${T.pill}; border: none; border-radius: 6px;
+          padding: 8px 10px; outline: 1px solid ${T.accent};
+        }
         .lpRowIcon {
           flex-shrink: 0; border: none; background: none; cursor: pointer;
           color: ${T.rowInk}; display: flex; align-items: center; justify-content: center;
@@ -5049,7 +5219,7 @@ export default function Home() {
           letter-spacing: 0.1em; color: ${T.inkSoft};
         }
         .gallery {
-          width: 100%; max-width: 640px; display: flex; flex-direction: column; gap: 16px;
+          width: 100%; max-width: 1000px; display: flex; flex-direction: column; gap: 20px;
         }
         .galleryHead { display: flex; align-items: center; justify-content: space-between; }
         .brand.big { font-size: 22px; }
@@ -5060,30 +5230,50 @@ export default function Home() {
           border-radius: ${T.radius}px; padding: 28px; text-align: center;
         }
         .galleryEmpty b { color: ${T.ink}; }
-        .galleryList { display: flex; flex-direction: column; gap: 8px; }
-        .artRow {
-          display: flex; align-items: stretch; gap: 8px;
-          background: ${T.panelSolid}; border: 1px solid ${T.line};
-          border-radius: ${T.radius}px; padding: 6px;
+        /* Procreate-style card grid: paper tile with the artwork's snapshot,
+           name beneath. Tap = open; long-press / right-click = actions menu. */
+        .galleryGrid {
+          display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+          gap: 20px 16px;
         }
-        .artOpen {
-          flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px;
-          background: none; border: none; cursor: pointer; text-align: left; padding: 8px 10px;
-          border-radius: 5px; transition: background 0.12s;
+        .artCard {
+          display: flex; flex-direction: column; gap: 9px; min-width: 0;
+          background: none; border: none; padding: 0; cursor: pointer;
+          -webkit-touch-callout: none; user-select: none; -webkit-user-select: none;
+          touch-action: manipulation;
         }
-        .artOpen:hover { background: ${T.pill}; }
-        .artName { font-size: 14px; font-weight: 700; color: ${T.ink};
+        .artThumb {
+          aspect-ratio: 4 / 3; border-radius: ${T.radius}px; overflow: hidden;
+          background: ${T.artboard}; border: 1px solid ${T.line};
+          display: flex; align-items: center; justify-content: center;
+          transition: transform 0.12s, box-shadow 0.12s;
+        }
+        .artCard:hover .artThumb { box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35); border-color: ${T.inkSoft}; }
+        .artCard:active .artThumb { transform: scale(0.97); }
+        .artThumb img { max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; }
+        .artBlank { font-family: ${T.mono}; font-size: 34px; color: ${T.thumb}; }
+        .artName { font-size: 13px; font-weight: 600; color: ${T.ink}; text-align: center;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .artMeta { font-family: ${T.mono}; font-size: 10px; color: ${T.inkSoft}; }
-        .artActions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-        .artActions button {
-          border: none; background: ${T.pill}; color: ${T.ink}; cursor: pointer;
-          font-family: ${T.mono}; font-size: 9px; text-transform: uppercase;
-          letter-spacing: 0.04em; padding: 8px 9px; border-radius: 6px;
+        .artMenuScrim { position: fixed; inset: 0; z-index: 80; }
+        .artMenu {
+          position: fixed; min-width: 190px; display: flex; flex-direction: column; gap: 2px;
+          background: ${T.panelSolid}; border: 1px solid ${T.line}; border-radius: ${T.radius}px;
+          padding: 6px; box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
         }
-        .artActions button:hover { background: ${T.hoverPill}; }
-        .artActions .del:hover { color: #fff; background: ${T.accent}; }
-        .galleryFoot { display: flex; gap: 8px; }
+        .artMenuName {
+          font-family: ${T.mono}; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+          color: ${T.inkSoft}; padding: 6px 10px 8px; border-bottom: 1px solid ${T.line};
+          margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .artMenu button {
+          border: none; background: none; color: ${T.ink}; cursor: pointer; text-align: left;
+          font-size: 13px; padding: 9px 10px; border-radius: 6px;
+        }
+        .artMenu button:hover { background: ${T.pill}; }
+        .artMenu .del:hover { color: #fff; background: ${T.accent}; }
+        /* quiet utility row — compact, not full-width bars under the grid */
+        .galleryFoot { display: flex; gap: 8px; justify-content: flex-end; padding-top: 4px; }
+        .galleryFoot .half { flex: 0 0 auto; width: auto; padding: 10px 16px; }
         .galleryHint { text-align: center; }
 
         /* ── universal bead library (gallery modal) ── */

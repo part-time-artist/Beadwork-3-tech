@@ -176,8 +176,8 @@ ok('#9 redo restores the import', (await page.locator('.lpGroupRow').count()) ==
 await page.waitForTimeout(2200) // autosave debounce
 await page.reload({ waitUntil: 'domcontentloaded' })
 await page.waitForTimeout(1500)
-if ((await page.locator('.galleryScrim .artOpen').count()) > 0) {
-  await page.locator('.galleryScrim .artOpen').first().click()
+if ((await page.locator('.galleryScrim .artCard').count()) > 0) {
+  await page.locator('.galleryScrim .artCard').first().click()
   await page.waitForTimeout(900)
 }
 await page.locator('button[title="Layers"]').click()

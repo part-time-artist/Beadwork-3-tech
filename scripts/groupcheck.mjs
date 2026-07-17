@@ -133,8 +133,8 @@ await page.waitForTimeout(1800) // autosave debounce
 await page.reload({ waitUntil: 'domcontentloaded' })
 await page.waitForTimeout(1500)
 // boot may land on the gallery — reopen the artwork first
-if (await page.locator('.galleryScrim .artOpen').first().isVisible().catch(() => false)) {
-  await page.locator('.galleryScrim .artOpen').first().click()
+if (await page.locator('.galleryScrim .artCard').first().isVisible().catch(() => false)) {
+  await page.locator('.galleryScrim .artCard').first().click()
   await page.waitForTimeout(800)
 }
 await page.locator('button[title="Layers"]').click()
