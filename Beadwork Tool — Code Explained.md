@@ -491,6 +491,51 @@ framing (Cancel is the only way out).
 
 ---
 
+## 6.9 The 2026-07-17 pass — gallery cards & friendlier touch
+
+**The gallery got pictures.** "My artworks" used to be a plain text list;
+now each artwork is a card with a real thumbnail of the beadwork. The trick:
+whenever an artwork auto-saves, `makeThumb()` in `App.jsx` quickly redraws
+the whole design *small* (~480 px, using the same simple-rectangles idea as
+the zoomed-out view) and stores that little PNG inside the artwork's record
+in IndexedDB. Displaying the gallery is then instant — no design has to be
+loaded or re-rendered just to show its card. Tap a card to open it;
+press-and-hold (or right-click on a computer) opens Rename / Duplicate /
+Delete. Older artworks saved before this feature show a letter placeholder
+until their next save quietly adds a thumbnail. (The dashboard's *look* is
+temporary — the user is designing the real UI in Figma; the machinery
+underneath stays.)
+
+**Layers panel gestures were re-tuned.** Before, dragging a layer row even
+6 px started *reordering* — so scrolling the list with a finger kept
+rearranging layers by accident. Now the rows follow Procreate's grammar:
+
+- a plain **swipe scrolls** (the row's CSS says `touch-action: pan-y`,
+  which tells the browser "vertical swipes are yours — scroll");
+- **hold ~0.4 s** and the row visibly lifts — *then* dragging reorders;
+- a quick **tap selects** as always, and a **double-tap on the name** turns
+  it into a little text box so layers (and groups) can be renamed in place.
+  Fun fact: iPads never fire the browser's built-in "double-click" event
+  for touches, so the double-tap is detected by hand (two taps on the same
+  row within 350 ms).
+
+**Every bead layer now shows a mini picture of itself** in the panel — a
+tiny live render of just that layer's beads, redrawn about a third of a
+second after you stop drawing (and only while the panel is open, so it
+never slows down painting).
+
+**The photo-import modal got finger-friendly.** All the little colour
+targets grew to fingertip size (~36 px), and colours can now be swapped by
+**dragging** a universal-palette swatch straight onto a layer chip — a
+ghost swatch follows your finger and the chip lights up when you're over
+it. Testing this also uncovered a sneaky old bug: tapping a chip usually
+landed on the colour *input* inside it, which swallowed the tap and — on
+iPad — popped open the system colour picker instead of selecting the chip.
+Now the first tap always selects; only tapping the already-selected chip's
+swatch opens the picker (for fine-tuning a colour by hand).
+
+---
+
 ## 7. Where to make common changes
 
 - 3-bead weave spacing looks off → `PACK_X` / `PACK_Y` in `geometry.js`
@@ -500,6 +545,8 @@ framing (Cancel is the only way out).
 - Add a whole new weave → a new file in `techniques/` + list it in `techniques/index.js`
 - New-artwork names (the trees) → `TREE_NAMES` in `App.jsx`
 - Auto-save delay → the `600` (ms) in the auto-save `useEffect`, `App.jsx`
+- Layer-reorder hold time → the `400` (ms) in `rowDrag`, `App.jsx`
+- Gallery-thumbnail size → the `480` in `makeThumb`, `App.jsx`
 - Where artworks are stored → `src/lib/store.js` (IndexedDB names at the top)
 - 1-bead "tap anywhere in a cell to paint" → `hitCell` in `techniques/oneBead.js`
 - Chart numbering direction → `rowLabel` / `colLabel` in `chart.js`

@@ -72,7 +72,10 @@ must be checked against the mockup, never assumed; that was a prior failure).
   layer per colour in a "From photo" group + the source photo as a hidden
   reference layer at the exact chosen frame — one undo step. The modal is a
   FIXED size (never resizes with the colours slider) and deliberately does
-  NOT close on outside clicks (framing work would be lost).
+  NOT close on outside clicks (framing work would be lost). Colour swap =
+  tap a chip then a universal swatch, or DRAG a swatch onto a chip
+  (pointer-based ghost — HTML5 DnD is dead on iOS); first tap on a chip's
+  swatch selects, second opens the colour picker. Touch targets ~34–36px.
 - **`src/lib/store.js`** — IndexedDB wrapper for the multi-artwork gallery
   (records = whole designs) + a `meta` store (last-opened id, bead library).
 - **`src/techniques/`** — per-weave grid rules (`index.js` registry +
@@ -133,13 +136,21 @@ values and rationale.
   pointer event; Path2Ds flush every ~1500 beads.
 - **Orientation is locked "woven"**: apex (even) rows horizontal, base beads
   ±45° mirrored checkerboard, via each technique's `tiltFor`.
+- **Layers panel gestures (Procreate grammar, locked 2026-07-17)**: plain
+  swipe SCROLLS (rows are `touch-action: pan-y`); hold ~400ms lifts a row,
+  then dragging reorders; double-tap a layer/group name = inline rename
+  (detected by hand — iOS never fires dblclick for touch). Bead layers show
+  mini live thumbnails, refreshed debounced while the panel is open.
 
 ### Persistence
 
 No backend. **Artworks live in IndexedDB** (`src/lib/store.js`) as a
 multi-artwork gallery with auto-save and auto-reopen; `.beadwork.json`
 export/import moves designs between devices. Save format v4 = layers (bead /
-image / bg types) + layer groups. Named palettes remain in localStorage
+image / bg types) + layer groups; each record also carries a small `thumb`
+PNG (rendered by `makeThumb()` inside the debounced save) that powers the
+gallery's card grid — tap opens, long-press / right-click = Rename ·
+Duplicate · Delete. Named palettes remain in localStorage
 (`beadwork3_palettes_v1`); the universal bead library lives in the IndexedDB
 `meta` store.
 

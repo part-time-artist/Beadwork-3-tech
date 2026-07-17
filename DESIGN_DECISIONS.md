@@ -1376,6 +1376,96 @@ Implementation sketch (approved for build on user's go):
 - Tests: fit shows whole photo + partial bead coverage, drag/Fill change the
   result, reference-layer alignment, perf gate re-run.
 
+## Dashboard (My artworks) redesign (grilling 2026-07-17)
+LOCKED:
+1. **Claude designs it** in the established Morii language (dark chrome,
+   Morii Lipi, green accent) — screenshots for approval, no Figma.
+   → SUPERSEDED same day: the USER will design the dashboard UI themselves
+   (Figma to come); the shipped mechanics (stored thumbnails, card grid,
+   long-press menu) stay as the base to reskin.
+2. **Visual card GRID with real bead thumbnails** — SUPERSEDES 2026-06-15
+   decision #3 ("text list, no thumbnails"). A small preview snapshot is
+   rendered and saved with each artwork on (auto)save; old records without
+   one show a placeholder until their next save.
+3. **Cards show the NAME only** (no technique/beads/date meta on the card).
+   Sort stays most-recently-edited first.
+4. **Actions via LONG-PRESS on the card** (Procreate-style): press-and-hold
+   opens a floating menu with Rename / Duplicate / Delete. Tap = open.
+   Desktop right-click opens the same menu (default taken — long-press alone
+   is near-undiscoverable with a mouse).
+Defaults taken: thumbnail = flat-rect LOD render of all visible layers
+(top-wins overdraw), paper ground, ~480px long edge PNG data-URL stored on
+the record (adds a few tens of KB; acceptable like decision #10 of the
+gallery grilling); header (brand + Bead library + New artwork) and footer
+(Import / Export file) stay; gallery widens to fit the grid.
+
+IMPLEMENTED 2026-07-17 (awaiting user's design approval before deploy):
+- App.jsx `makeThumb()`: whole artboard at 480px long edge, visible layers
+  (group visibility respected via `layerShown`) bottom→top as LOD coverage
+  rects + bg colour + placed image layers; transparent when bg hidden.
+  Runs only inside the debounced autosave / manual save; O(beads).
+- `thumb` saved on the record (autosave, Save, kept by Duplicate/backup);
+  `summarize()` carries it to the gallery state. Old records show a
+  monogram placeholder tile until their next save writes a thumb.
+- Gallery: `.galleryGrid` (auto-fill minmax 180px), `.artCard` = paper
+  tile (4:3, artwork contained) + centred name. Tap opens; 450ms
+  long-press (10px cancel radius, iOS callout/user-select suppressed) or
+  desktop right-click opens `.artMenu` (Rename / Duplicate / Delete),
+  clamped to the viewport; the release-click after a long-press is
+  suppressed. Footer became a compact right-aligned utility row; old
+  .artRow list + `timeAgo` deleted.
+- Verified: scripts/dashboard.mjs, 16 checks green (thumb is a data-URL
+  PNG containing the painted beads, name-only card, long-press menu, no
+  open on release, duplicate keeps thumb, rename/delete via menu, menu
+  closes on outside tap, thumb survives reload); screenshots
+  dashboard-showcase(.-ipad).png; photoimport suite re-pointed at
+  `.artCard` and still green.
+
+## Usability pass (grilling 2026-07-17) — modal touch + layers panel
+LOCKED:
+1. **Photo-import modal: drag a UNIVERSAL swatch onto a colour CHIP to swap
+   that colour** (drag-and-drop); tap-chip-then-tap-swatch keeps working.
+2. **Photo-import modal: bigger touch targets** — chips, universal
+   swatches and buttons meet the ~44px iOS minimum (user: selecting is
+   too hard).
+3. **Layers panel: swipe scrolls, long-press lifts** — plain swipe/scroll
+   never rearranges; press-and-hold (~400ms) picks a row up to drag-
+   reorder (replaces the instant drag that caused accidental rearranges).
+4. **Layer rename: double-tap the name** → inline text field.
+5. **Layer thumbnails: mini live render of each layer's beads**
+   (Procreate-style), refreshed after edits settle; photo-import colour
+   layers naturally show their colour.
+
+IMPLEMENTED 2026-07-17:
+- App.jsx `rowDrag` rewritten: rows are `touch-action: pan-y` (plain swipe
+  scrolls natively; sliding >8px before the hold hands the gesture to the
+  browser); holding ~400ms lifts the row (`.dragging` shows at once, a
+  non-passive touchmove preventDefault blocks scroll while lifted), then
+  dragging reorders. Tap still selects / collapses.
+- Double-tap (pointer-based — iOS Safari never fires dblclick for touch)
+  on a layer or group name → `.lpNameEdit` inline input; Enter/blur
+  commits, Esc cancels. Replaces the group's old window.prompt rename.
+- `paintBeadRects` extracted (shared by the gallery thumb + layer minis);
+  `layerThumbs` effect renders each bead layer at 112px on the light
+  artboard tile, debounced 350ms, only while the panel is open.
+- PhotoImport: `swatchDown` pointer-drag (HTML5 DnD is dead on iOS) — a
+  ghost swatch follows the pointer, the hovered chip highlights
+  (`.piChip.drop`), drop = recolour + select that chip; plain tap keeps
+  the old selected-chip flow. **Chip-select bug fixed**: tapping a chip
+  usually landed on its colour `<input>`, which swallowed the tap (and
+  opened the system picker on iPad) — now the first tap on the swatch
+  SELECTS the chip; only tapping the already-selected chip's swatch opens
+  the picker.
+- Touch sizes: universal swatches 22→36px, chip swatches 30→34px (34 is
+  the largest where 16 chips still fit one row of the fixed 940px box),
+  eye badge 17→21px, crop-bar/Cancel buttons padded up; strips 64/46 →
+  72/104px (portrait 128/108) inside the same fixed modal.
+- Verified: scripts/usability.mjs 15 checks green (quick swipe does NOT
+  reorder, hold-drag does, inline rename, layer minis, 36px targets,
+  940×680 box constant, chips fit at max colours, ghost-drag swap, tap
+  swap); photoimport 16 checks re-run green. Screenshots
+  usability-layers.png / usability-modal.png.
+
 MODAL DESIGN PREVIEW built 2026-07-15 (in `photo-to-bead/`, awaiting user's
 design approval before porting into the main tool): the prototype now renders
 AS the "NEW ARTWORK — FROM PHOTO" modal in the main tool's exact dark
