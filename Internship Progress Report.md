@@ -138,7 +138,7 @@ real bead colours, and layer groups for organising complex designs.
 *The current interface, modelled on Procreate: tools along the top, brush
 size on the left rail, colour palette on the right, canvas front and centre.*
 
-**Current experiment — "Kinetic Lab" (9 July).**
+**Kinetic Lab (9 July).**
 Real beadwork is not a flat image — it hangs, drapes and sways. Kinetic Lab
 is a companion tool that loads a finished design and simulates it as a
 piece of hanging bead fabric using cloth physics: you can grab it, watch it
@@ -149,11 +149,46 @@ will *behave* before a single bead is woven.
 *Kinetic Lab: a finished design hanging as simulated bead fabric, with
 physics controls (gravity, breeze, stiffness) and video export.*
 
+**Phase 6 — Photo import goes live, and the gallery becomes visual (16–17 July).**
+The photo-to-bead conversion, built and tested as a separate standalone
+prototype, was integrated directly into the editor as an "Import photo as
+beads" option in the menu — the standalone prototype was then retired. Two
+rounds of fixes followed once real use turned up problems: photos now always
+open uncropped (never a silent guess at framing), tapping the photo's
+thumbnail opens a dedicated crop mode with Fit/Fill/Done controls, and an
+accidental tap outside the import window can no longer discard framing work
+— Cancel is the only way to close it.
+
+The "My artworks" gallery was also rebuilt: what used to be a plain text
+list (name, technique, bead count, last edited) is now a grid of cards, each
+showing a live thumbnail of the actual design. Long-press (or right-click on
+desktop) opens Rename / Duplicate / Delete. Alongside this, the layers panel
+picked up the touch gestures designers actually expect from apps like
+Procreate — a plain swipe scrolls the list, holding a row briefly lifts it
+for reordering, and double-tapping a name renames it inline.
+
+**Side exploration — a cross-stitch tool (16–20 July, personal project).**
+Outside the Morii Beadwork codebase, I used the same underlying idea — a
+drawing grid built from a craft's *real* geometry instead of square pixels —
+to start a second tool for cross-stitch embroidery, which has the same
+mismatch problem: a stitch drawn as a square pixel doesn't have the same
+proportions as a real stitch sewn on aida cloth. I forked the Beadwork
+codebase as a starting point, then replaced its bead grid with cross-stitch's
+own grid and stitch shapes, ported over the same canvas-first iPad-style
+interface, and fixed drawing lag plus added exact stitch shapes and a
+three-way brush. This isn't part of the Morii product or launch plan — it's
+my own side project — but it's a useful test of whether the approach behind
+Beadwork (keep the real geometry separate from the drawing engine) actually
+generalises to a different craft, and it does.
+
 ## Summary
 
-In six weeks the project has gone from a geometry experiment to a working
-studio tool: charts are distortion-free by construction rather than by
-careful compensation, the tool runs smoothly on the iPads the designers
-actually use, and the interface is familiar enough to need no training.
-Next steps are gathering feedback from real design work in the studio and
-refining the kinetic presentation tool.
+In about seven weeks the project has gone from a geometry experiment to a
+working studio tool: charts are distortion-free by construction rather than
+by careful compensation, the tool runs smoothly on the iPads the designers
+actually use, the interface is familiar enough to need no training, and the
+newest additions (photo import, a visual gallery) round out the everyday
+workflow a designer would actually use day to day. Next steps are gathering
+feedback from real design work in the studio, refining the kinetic
+presentation tool, and — as a personal exploration — seeing how far the same
+engine carries into other craft techniques like cross-stitch.

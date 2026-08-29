@@ -1480,3 +1480,34 @@ toast-only until integration. Suite updated + green (16 checks): #4 drives
 the cm W pill instead of the removed resolution slider; #11 verifies Match
 photo shape (20cm × 4:3 photo → H=15cm). Screenshots scripts/modal-empty.png
 / modal-loaded.png.
+
+## Palette size + Photo Import chip-swap + selected-colour halo (2026-07-20)
+LOCKED (user request — "8 colour is less now" + drag-to-exchange not working):
+1. **Named-palette cap raised 8 → 24 swatches.** `addToPalette` and the
+   palette row's "+" button both gated on `p.colors.length < 8`; both now
+   gate on `< 24`. `.cpPalRow` was already `flex-wrap`, so growth just wraps
+   to more rows inside the existing (already-scrollable) colour panel — no
+   new scrollbar on the row itself, per the user's explicit ask.
+2. **Photo Import: chip-to-chip drag now exchanges two colours.** Root
+   cause of "drag and drop to exchange isn't working": only *universal
+   swatch → chip* dragging existed (2026-07-17 pass); dragging one
+   already-placed chip onto another — the gesture a user reaches for when
+   they say "exchange" — did nothing. Added `chipSwatchDown` in
+   `PhotoImport.jsx`, mirroring the existing `swatchDown` drag: drop on a
+   different chip swaps `layers[i].color` / `layers[j].color`. A
+   `suppressChipClick` ref eats the native `click` the colour `<input>`
+   fires after the drag's pointerup, which would otherwise open the OS
+   colour picker or re-fire tap-to-select.
+3. **Selecting a colour chip subtly halos its beads in the preview.** Two-
+   tone outline (dark then thin white, so it reads on any bead colour) drawn
+   over just the selected layer's beads — no dimming/recolouring of anything
+   else, keeping the "never bias bead-colour perception" rule intact. Halo
+   Path2D chunks are collected during the fill pass but stroked only after
+   *all* fills finish, so a later neighbouring bead's fill can't clip an
+   earlier bead's ring.
+- Verified: `scripts/verify3.mjs` (7 checks green — palette grows past 8,
+  hard-stops at 24, no row scrollbar; chip-drag swaps both colours, no
+  leftover click side-effect; selecting a chip visibly changes the preview
+  canvas) + `scripts/dragswaptest.mjs` (universal-swatch → chip drag still
+  works). Dev server for this pass ran on **3001** — port 3000 was occupied
+  by the sibling cross-stitch-tool project's own dev server; do not kill it.

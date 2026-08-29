@@ -536,6 +536,39 @@ swatch opens the picker (for fine-tuning a colour by hand).
 
 ---
 
+## 6.10 The 2026-07-20 pass — bigger palettes & chip-to-chip colour swap
+
+**Named colour palettes now hold 24 swatches, not 8.** The cap was a plain
+number check (`p.colors.length < 8`) in two spots in `App.jsx` — the "+" add
+button and the function it calls both had it, so both moved to `24`. The row
+of swatches was already `flex-wrap`, so a bigger palette just wraps onto a
+second or third line inside the same panel; nothing had to be made scrollable.
+
+**Photo-import chips can now be dragged onto each other to swap colours.**
+The 2026-07-17 pass (above) added dragging a *universal-palette* swatch onto
+a chip to recolour it — but there was no way to drag one already-placed
+*chip* onto another chip to trade their two colours, which is the more
+obvious gesture people reach for first. `chipSwatchDown` in `PhotoImport.jsx`
+mirrors the existing drag code: press a chip's swatch, move more than 6 px
+and it counts as a drag, a ghost swatch follows the finger, and dropping on a
+different chip swaps `layers[i].color` and `layers[j].color`. The fiddly
+part: releasing a drag still fires a native `click` on the colour `<input>`
+underneath, which — left alone — would either pop the system colour picker
+or re-trigger the plain "select this chip" logic. A one-shot
+`suppressChipClick` flag, set right when the drop happens, eats that stray
+click.
+
+**Selecting a colour now lightly outlines its beads in the preview.** Tap a
+chip and every bead of that colour gets a subtle two-layer ring (a soft dark
+line then a thin white line, so it reads over both light and dark bead
+colours) — nothing else on the canvas changes, so it can't make one colour
+*look* different from how it'll actually weave, it just shows you where that
+colour lives. One care point in `renderPreview`: the ring has to be drawn
+*after* every bead is filled, not while filling is still in progress, or a
+later neighbouring bead could paint over part of an earlier bead's ring.
+
+---
+
 ## 7. Where to make common changes
 
 - 3-bead weave spacing looks off → `PACK_X` / `PACK_Y` in `geometry.js`

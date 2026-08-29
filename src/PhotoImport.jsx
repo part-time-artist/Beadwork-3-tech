@@ -98,8 +98,8 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
   useEffect(() => {
     if (!imgData) return
     if (cropping) drawCrop(canvasRef.current, imgData, frame, geo)
-    else if (converted) renderPreview(canvasRef.current, converted, layers, cols, rows, tech)
-  }, [imgData, converted, layers, cols, rows, tech, cropping, frame, geo])
+    else if (converted) renderPreview(canvasRef.current, converted, layers, cols, rows, tech, sel)
+  }, [imgData, converted, layers, cols, rows, tech, cropping, frame, geo, sel])
 
   const toggleLayer = (i) =>
     setLayers((ls) => ls.map((l, j) => (j === i ? { ...l, visible: !l.visible } : l)))
@@ -138,6 +138,57 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
         const i = chipUnder(ev.clientX, ev.clientY)
         if (i != null) { setLayerColor(i, c); setSelLayer(i) }
       } else if (sel != null) setLayerColor(sel, c) // plain tap keeps the old flow
+    }
+    const cancel = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
+      setDragSw(null)
+      setDragOver(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', cancel)
+  }
+
+  // Chip-to-chip exchange: dragging one layer chip's own swatch onto another
+  // chip trades their two colours (not a one-way overwrite). Reuses the same
+  // ghost/drop-target state as the universal-swatch drag above. A drag ends
+  // in a native "click" on the colour input, which must be swallowed —
+  // otherwise it either opens the OS colour picker or re-fires the tap-to-
+  // select logic on the chip the drag started from.
+  const suppressChipClick = useRef(false)
+  const chipSwatchDown = (i, e) => {
+    if (e.button != null && e.button !== 0) return
+    const sx = e.clientX, sy = e.clientY
+    let dragging = false
+    const move = (ev) => {
+      if (!dragging && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 6) dragging = true
+      if (dragging) {
+        setDragSw({ color: layers[i].color, x: ev.clientX, y: ev.clientY })
+        setDragOver(chipUnder(ev.clientX, ev.clientY))
+      }
+    }
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
+      setDragSw(null)
+      setDragOver(null)
+      if (dragging) {
+        suppressChipClick.current = true
+        const j = chipUnder(ev.clientX, ev.clientY)
+        if (j != null && j !== i) {
+          setLayers((ls) => {
+            const next = ls.slice()
+            const a = next[i].color
+            next[i] = { ...next[i], color: next[j].color }
+            next[j] = { ...next[j], color: a }
+            return next
+          })
+          setSelLayer(j)
+        }
+      }
     }
     const cancel = () => {
       window.removeEventListener('pointermove', move)
@@ -325,7 +376,12 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
                     className="piChipSwatch"
                     value={l.color}
                     onChange={(e) => setLayerColor(i, e.target.value)}
-                    onClick={(e) => { e.stopPropagation(); if (sel !== i) { e.preventDefault(); setSelLayer(i) } }}
+                    onPointerDown={(e) => { e.stopPropagation(); chipSwatchDown(i, e) }}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (suppressChipClick.current) { suppressChipClick.current = false; e.preventDefault(); return }
+                      if (sel !== i) { e.preventDefault(); setSelLayer(i) }
+                    }}
                   />
                   <button
                     data-layer-eye
@@ -345,7 +401,7 @@ export default function PhotoImport({ T, tech, cols, rows, canvasCm, universalPa
           <div className="piUniBody">
             <div className="piSoft">
               {sel == null
-                ? 'Drag a colour onto a layer chip to swap it — or tap a chip first, then a colour.'
+                ? 'Drag a colour onto a layer chip to swap it, drag one chip onto another to exchange their colours, or tap a chip first, then a colour.'
                 : `Tap a colour to recolour layer ${sel + 1}, or drag one onto any chip.`}
             </div>
             <div className="piUni">
@@ -553,7 +609,7 @@ function drawCrop(canvas, imgData, frame, geo) {
 // ---- bead preview (unchanged logic: capped canvas + construction LOD) -----
 const FLUSH_AT = 1500
 const LOD_BEAD_PX = 10
-function renderPreview(canvas, converted, layers, cols, rows, tech) {
+function renderPreview(canvas, converted, layers, cols, rows, tech, sel) {
   if (!canvas) return
   const { geo, assigned } = converted
   const scale = Math.min(1, Math.sqrt(PREVIEW_MAX_PX / (geo.width * geo.height)))
@@ -572,6 +628,35 @@ function renderPreview(canvas, converted, layers, cols, rows, tech) {
     ctx.fillStyle = hex
     ctx.fill(a.path)
     active.set(hex, { path: new Path2D(), count: 0 })
+  }
+  // Selected-layer halo: a subtle two-tone outline over that colour's beads
+  // only — never dims or recolours anything, so it can't bias colour
+  // judgement, it just highlights where the selected layer lives. Chunks are
+  // collected (not stroked) during the fill pass and drawn only at the very
+  // end, on top of every fill — stroking mid-pass would let a later
+  // neighbouring bead's fill clip the edge of an earlier halo.
+  let selPath = new Path2D()
+  let selCount = 0
+  const selChunks = []
+  const stashSel = () => {
+    if (!selCount) return
+    selChunks.push(selPath)
+    selPath = new Path2D()
+    selCount = 0
+  }
+  const strokeSel = () => {
+    stashSel()
+    if (!selChunks.length) return
+    ctx.save()
+    for (const chunk of selChunks) {
+      ctx.lineWidth = Math.max(1.5, geo.Bw * 0.16)
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)'
+      ctx.stroke(chunk)
+      ctx.lineWidth = Math.max(0.75, geo.Bw * 0.07)
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+      ctx.stroke(chunk)
+    }
+    ctx.restore()
   }
   for (let row = 0; row < rows; row++) {
     const wide = apexWide && row % 2 === 0
@@ -592,8 +677,18 @@ function renderPreview(canvas, converted, layers, cols, rows, tech) {
       }
       a.count++
       if (a.count >= FLUSH_AT) flush(hex)
+      if (idx === sel) {
+        if (asRect) {
+          selPath.rect(cx - (wide ? geo.Px : geo.Px / 2), cy - geo.Py / 2, wide ? geo.Px * 2 : geo.Px, geo.Py)
+        } else {
+          tech.beadOutline(selPath, cx, cy, geo.Bw, geo.Bh, tech.tiltFor(col, row))
+        }
+        selCount++
+        if (selCount >= FLUSH_AT) stashSel()
+      }
     }
   }
   for (const hex of active.keys()) flush(hex)
+  strokeSel()
   ctx.restore()
 }

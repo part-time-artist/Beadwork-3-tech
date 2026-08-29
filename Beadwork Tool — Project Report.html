@@ -205,6 +205,7 @@
   <a href="#challenges">challenges</a>
   <a href="#product">the product</a>
   <a href="#photo-to-bead">photo to bead</a>
+  <a href="#cross-stitch">cross-stitch spinoff</a>
   <a href="#launch">go-to-market</a>
   <a href="#roadmap">future scope</a>
   <a href="#conclusion">conclusion</a>
@@ -215,7 +216,7 @@
 <header class="masthead col">
   <div class="brandline">
     <span class="brand">MORII DESIGN<span class="dot"> ●</span></span>
-    <span class="eyebrow">Project report · July 2026</span>
+    <span class="eyebrow">Project report · July 2026 · updated 21 July</span>
   </div>
   <h1>Beadwork Design Tool<br />Project Report</h1>
   <p class="deck">The development of a browser-based design application for Kutch bead-weaving: the problem it addresses, how it was built, the challenges resolved along the way, and the studio's plan to launch it as a subscription product.</p>
@@ -226,7 +227,7 @@
   <h2>Executive summary</h2>
   <p>Morii Design works with artisan communities in Kutch, Gujarat, whose bead-weaving tradition produces densely patterned textile pieces. The studio designs new patterns for these artisans; each design must be delivered as a colour chart that an artisan can follow bead by bead at the loom.</p>
   <p>Existing design software could not represent the craft accurately. Beads are not square, and the weave does not place them in a square grid — so designs prepared in Photoshop were consistently distorted when woven. In June 2026 the studio identified this as the central problem and began building a dedicated tool. Over approximately six weeks, the tool progressed from a measured geometric model of the weave to a complete, tested design application, deployed continuously to a live site and used on iPad with Apple Pencil.</p>
-  <p>The tool is now feature-complete for its first market release. Morii Design is preparing to launch it as the studio's <strong>first digital product</strong>, on a <strong>subscription model</strong>, with branding and launch preparation currently in progress. A further capability — converting a photograph directly into a bead pattern — has also been prototyped as a standalone experiment (Section 9).</p>
+  <p>The tool is now feature-complete for its first market release. Morii Design is preparing to launch it as the studio's <strong>first digital product</strong>, on a <strong>subscription model</strong>, with branding and launch preparation currently in progress. A further capability — converting a photograph directly into a bead pattern — has since moved from standalone prototype to a <strong>shipped, integrated feature</strong> of the editor (Section 9). The same underlying engine — a drawing grid built from a craft's real geometry rather than square pixels — has also been carried into a second, personal exploration applying the same idea to cross-stitch (Section 10).</p>
   <dl class="kv">
     <div><dt>Project</dt><dd>Beadwork — a design tool for the 3-bead weave</dd></div>
     <div><dt>Organisation</dt><dd>Morii Design (first digital product)</dd></div>
@@ -293,7 +294,7 @@
 <section class="col" id="timeline">
   <div class="sec-eyebrow">6 · Development timeline</div>
   <h2>Six weeks from model to product</h2>
-  <p>Development ran in five phases, with roughly seventy revisions deployed continuously to a live site. Each phase closed with automated browser tests verifying its features before release.</p>
+  <p>Development ran in six phases, with close to ninety revisions deployed continuously to a live site. Each phase closed with automated browser tests verifying its features before release.</p>
   <ol class="timeline">
     <li>
       <span class="when">Phase 1 · Early June 2026</span>
@@ -319,6 +320,11 @@
       <span class="when">Phase 5 · Mid July</span>
       <span class="what">Launch-readiness features</span>
       <p>Shape assistance (hold-to-snap circles, lines, rectangles and polygons), a universal library of the studio's real bead colours, layer groups, a refreshed icon set, and the final rendering correction that made bead colour exact at every zoom level.</p>
+    </li>
+    <li>
+      <span class="when">Phase 6 · Mid–late July</span>
+      <span class="what">Photo import, gallery and touch usability</span>
+      <p>The photo-to-bead conversion prototype (Section 9) was integrated directly into the editor as an "Import photo as beads" flow, then refined so photos always open uncropped and reframing never silently discards work. The artwork gallery was rebuilt from a plain text list into a visual card grid with a live saved thumbnail per design, and the layers panel gained Procreate-style touch gestures — hold to reorder, double-tap to rename — matching how the studio's designers already work on iPad.</p>
     </li>
   </ol>
   <div class="fig-pair">
@@ -395,7 +401,8 @@
     <li><strong>Layers and groups</strong> — visibility, locking, reordering, merging, alpha lock, collapsible groups, and reference-photo tracing with adjustable opacity.</li>
     <li><strong>Pattern tools</strong> — motif repetition in grid, brick and half-drop layouts; selection mirroring for symmetric designs.</li>
     <li><strong>Colour management</strong> — per-artwork palettes, a device-wide library of the studio's real bead colours, and a deliberately neutral interface that does not bias colour judgement.</li>
-    <li><strong>Artwork management</strong> — a gallery of artworks with automatic saving, file export and import for backup and transfer.</li>
+    <li><strong>Artwork management</strong> — a gallery of artworks shown as a card grid with a live saved thumbnail per design, automatic saving, long-press/right-click rename · duplicate · delete, and file export/import for backup and transfer.</li>
+    <li><strong>Import photo as beads</strong> — a photograph opens uncropped, can be panned and reframed without losing work, and commits as an editable layer of beads in the chosen palette — see Section 9.</li>
     <li><strong>Chart export</strong> — a print-ready chart with outlined beads, guide lines every ten rows, edge numbering, and a colour key with per-colour bead counts.</li>
   </ul>
   <figure>
@@ -421,9 +428,10 @@
 </section>
 
 <section class="col" id="photo-to-bead">
-  <div class="sec-eyebrow">9 · Emerging capability</div>
+  <div class="sec-eyebrow">9 · Shipped feature</div>
   <h2>Converting a photograph directly into a bead pattern</h2>
-  <p>A further capability was prototyped this month: converting an uploaded photograph directly into a bead pattern, matched to a chosen colour palette and rendered on the true weave lattice rather than a plain pixel grid. It is built and tested as a <strong>separate, standalone prototype</strong>, deliberately kept apart from the main application while its output quality is assessed — a candidate for integration into Beadwork once proven, not yet a shipped feature.</p>
+  <p>A capability first built as a standalone prototype — converting an uploaded photograph directly into a bead pattern, matched to a chosen colour palette and rendered on the true weave lattice rather than a plain pixel grid — has since been <strong>integrated into the main editor</strong> as an "Import photo as beads" flow, and the separate prototype was retired once its engine moved in. Each conversion commits as one bead layer per colour, grouped together, alongside the source photo kept as a hidden reference layer — a single undo step.</p>
+  <p>Two rounds of refinement followed integration, both driven by the same principle that governs the rest of the tool: never lose the designer's work silently. Photos now always open at full-fit rather than being silently cropped to the canvas; tapping the thumbnail opens a dedicated crop mode (pan, zoom, Fit · Fill · Done) instead of committing a guess; and the import modal was fixed so an accidental tap outside it can no longer discard an in-progress framing — Cancel is the only way out.</p>
   <p>The conversion samples the source photograph once at every real bead position on the lattice, rather than treating the image as a plain grid of square pixels, so the result already respects the weave's staggered, half-density structure before any colour matching happens. Each sample is matched to the nearest colour in the working palette; an optional dithering step, adapted from a classic printing technique to the weave's honeycomb adjacency, preserves smooth gradients that a small palette would otherwise flatten into visible bands. The example below shows the same photograph converted with and without dithering, at 9,600 beads.</p>
   <div class="fig-pair">
     <figure>
@@ -435,11 +443,18 @@
       <figcaption><b>Figure 15.</b> The same photograph without dithering: a flatter, more graphic result with visible colour banding.</figcaption>
     </figure>
   </div>
-  <p style="font-size:15px; color:var(--ink-soft);">During development, a rendering performance defect was found and corrected — the same class of issue already resolved once in the main application's chart exporter (Section 7.4): accumulating too many beads into a single drawing operation before rendering degrades disproportionately as bead count grows. At the prototype's highest resolution setting, this took the interactive preview from a 3.6-second freeze to under one second, keeping every adjustment to the palette or resolution responsive.</p>
+  <p style="font-size:15px; color:var(--ink-soft);">During development, a rendering performance defect was found and corrected — the same class of issue already resolved once in the main application's chart exporter (Section 7.4): accumulating too many beads into a single drawing operation before rendering degrades disproportionately as bead count grows. At the import flow's highest resolution setting, this took the interactive preview from a 6.9-second freeze to 117 milliseconds, keeping every adjustment to the palette or resolution responsive.</p>
+</section>
+
+<section class="col" id="cross-stitch">
+  <div class="sec-eyebrow">10 · Related exploration</div>
+  <h2>Applying the same engine to cross-stitch</h2>
+  <p>Alongside the Beadwork product, a personal, self-directed exploration tested how far the same idea generalises: cross-stitch is a different craft with the same underlying flaw in existing software — a stitch drawn on a square-pixel grid does not have the same proportions as a real stitch sewn on aida cloth. Starting from Beadwork's codebase, the project replaced the bead lattice with cross-stitch's grid and shapes, then rebuilt the interface as the same canvas-first, iPad-style workspace already proven in the main product, including its drag-and-drop three-way brush and drawing-lag fixes.</p>
+  <p>This work sits outside Morii Design's Beadwork deliverable — it is not part of the studio's product or launch plan — but it is included here because it validates the core architectural bet behind Beadwork: that separating the weave's real geometry from the drawing and rendering machinery makes the tool portable to a different craft, not just a different pattern.</p>
 </section>
 
 <section class="col" id="launch">
-  <div class="sec-eyebrow">10 · Go-to-market</div>
+  <div class="sec-eyebrow">11 · Go-to-market</div>
   <h2>Morii Design's first digital product</h2>
   <p>Beadwork will be <strong>Morii Design's first digital product</strong>. The studio's work has until now existed in thread, bead and fabric; this launch extends the same standards — precision, respect for the craft, and fidelity between design and finished piece — into software built in-house.</p>
   <p>The commercial model is <strong>subscription-based</strong>: the tool as an ongoing service for textile designers, craft studios and serious practitioners, with subscription revenue funding continued development. Launch preparation is currently in progress across four workstreams:</p>
@@ -452,13 +467,12 @@
 </section>
 
 <section class="col" id="roadmap">
-  <div class="sec-eyebrow">11 · Future scope</div>
+  <div class="sec-eyebrow">12 · Future scope</div>
   <h2>Roadmap beyond launch</h2>
   <ul class="clean">
     <li><strong>Accounts and cloud synchronisation.</strong> Artworks currently save on-device with file export for backup; the subscription launch requires sign-in, cloud storage and cross-device continuity.</li>
     <li><strong>Subscription infrastructure.</strong> Plans, billing, trials, and licensing terms that keep the tool accessible to individual designers.</li>
     <li><strong>Additional weave techniques.</strong> The grid engine is already modular (3-bead and 1-bead today); further stitches — 2-bead variants, netting, peyote-family weaves — can each be added as a technique module.</li>
-    <li><strong>Photo-to-pattern integration.</strong> The standalone conversion prototype (Section 9) folded into the main application as a real feature — starting a new artwork from an uploaded photograph, with the result editable like any hand-drawn design.</li>
     <li><strong>Print-grade chart output.</strong> Multi-sheet A4/A3 PDF pagination with alignment marks for large pieces, alongside the current single-sheet chart.</li>
     <li><strong>Pattern library and community.</strong> Shareable motifs and palettes, with the longer-term possibility of a marketplace connecting designers and artisan groups.</li>
     <li><strong>Collaboration.</strong> Shared studio workspaces, review comments, and structured hand-off between design and production.</li>
@@ -472,7 +486,7 @@
 </section>
 
 <section class="col" id="conclusion">
-  <div class="sec-eyebrow">12 · Conclusion</div>
+  <div class="sec-eyebrow">13 · Conclusion</div>
   <h2>Assessment</h2>
   <p>In approximately six weeks, the studio identified a precise gap between digital design and a traditional craft, specified the geometry that closes it, and built a complete application on that foundation: accurate to the weave, fast enough for professional pencil work on a tablet, and verified by automated tests at every release.</p>
   <p>The tool is ready for its market. The remaining work is commercial rather than technical — identity, pricing, accounts and onboarding — and is under way. When it launches, Beadwork will carry Morii Design into digital products for the first time, on the same principle the studio has always worked to: what is designed is what is made.</p>

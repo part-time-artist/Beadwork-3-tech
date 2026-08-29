@@ -1115,9 +1115,9 @@ export default function Home() {
     if (active !== undefined) setActivePaletteId(active)
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)) } catch (e) {}
   }
-  // Named colour palettes: newest on top, max 8 swatches each. The right rail
-  // shows the ACTIVE palette; picking one in the colour picker makes it active,
-  // and the rail's + adds the current colour to it.
+  // Named colour palettes: newest on top, max 24 swatches each. The right
+  // rail shows the ACTIVE palette; picking one in the colour picker makes it
+  // active, and the rail's + adds the current colour to it.
   const addPalette = () => {
     const p = { id: newPaletteId(), name: `Palette ${savedPalettes.length + 1}`, colors: color ? [color] : [] }
     persistPalettes([p, ...savedPalettes], p.id) // new palette on top + active
@@ -1130,7 +1130,7 @@ export default function Home() {
   }
   const addToPalette = (id) =>
     persistPalettes(savedPalettes.map((p) =>
-      (p.id === id && p.colors.length < 8 && !p.colors.includes(color)) ? { ...p, colors: [...p.colors, color] } : p))
+      (p.id === id && p.colors.length < 24 && !p.colors.includes(color)) ? { ...p, colors: [...p.colors, color] } : p))
   const removeFromPalette = (id, j) =>
     persistPalettes(savedPalettes.map((p) => (p.id === id ? { ...p, colors: p.colors.filter((_, x) => x !== j) } : p)))
   const activePalette =
@@ -3298,23 +3298,41 @@ export default function Home() {
   // Mini live thumbnails for the layers panel (Procreate-style): each bead
   // layer renders its own beads on a transparent tile, refreshed after edits
   // settle and only while the panel is open. O(beads) per refresh.
+  // lastThumbSrcRef remembers WHICH beads Map (by reference) produced the last
+  // data URL for each layer. Bead Maps are replaced wholesale on every edit
+  // (never mutated in place) — see applyBeads/writeActiveLayer — so a
+  // reference match means "this layer hasn't changed since its last thumb".
+  // Without this, drawing on ONE layer of a multi-layer design (e.g. the
+  // several colour layers a photo import creates) re-rendered and re-encoded
+  // EVERY other untouched layer's thumbnail too, after every single stroke.
   const [layerThumbs, setLayerThumbs] = useState({})
+  const lastThumbSrcRef = useRef(new Map()) // layerId -> beads Map used last time
   useEffect(() => {
     if (!showLayers) return
     const t = setTimeout(() => {
       const s = 112 / Math.max(geo.width, geo.height)
       const w = Math.max(1, Math.round(geo.width * s))
       const h = Math.max(1, Math.round(geo.height * s))
+      const prevSrc = lastThumbSrcRef.current
+      const nextSrc = new Map()
+      let changed = false
       const next = {}
       for (const l of layersRef.current) {
         if (l.type !== 'bead' || !l.beads || !l.beads.size) continue
+        nextSrc.set(l.id, l.beads)
+        if (prevSrc.get(l.id) === l.beads && layerThumbs[l.id]) {
+          next[l.id] = layerThumbs[l.id] // unchanged since last render — reuse it
+          continue
+        }
+        changed = true
         const cv = document.createElement('canvas')
         cv.width = w
         cv.height = h
         paintBeadRects(cv.getContext('2d'), l.beads, s)
         next[l.id] = cv.toDataURL('image/png')
       }
-      setLayerThumbs(next)
+      lastThumbSrcRef.current = nextSrc
+      if (changed || nextSrc.size !== prevSrc.size) setLayerThumbs(next)
     }, 350)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4325,7 +4343,7 @@ export default function Home() {
                               title={c}
                             >{editing ? '×' : ''}</button>
                           ))}
-                          {!editing && p.colors.length < 8 && (
+                          {!editing && p.colors.length < 24 && (
                             <button className="cpSw add" onClick={(e) => { e.stopPropagation(); addToPalette(p.id) }} title="Add the current colour">+</button>
                           )}
                         </div>
