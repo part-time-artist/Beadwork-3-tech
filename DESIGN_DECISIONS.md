@@ -21,8 +21,11 @@ context. The `/grill-me` skill reads and appends to this file.
 
 ## Locked decisions (deliverable + export)
 1. Deliverable: **printed coloured chart**, read bead-by-bead at the loom.
-2. Every bead drawn with a **thin outline** so a run of N same-colour beads reads
-   as N distinct ovals.
+2. ~~Every bead drawn with a **thin outline** so a run of N same-colour beads
+   reads as N distinct ovals.~~ **REVERSED 2026-10-14**: outlines removed from
+   the exported chart (PNG/JPG/SVG) — user found them unwanted. Beads are
+   colour-only now; guide lines every 10 + edge numbers (#6) carry the
+   counting job instead. See "Export formats" below.
 3. Sizing input: physical **cm** is primary; bead/row counts derive from it.
 4. Chart beads: **tilted woven** (true-to-craft).
 5. Print scale: **enlarged, fixed ~8 mm per bead**; large designs span sheets.
@@ -99,10 +102,11 @@ B. Marquee Select tool + recolor/copy-paste/delete actions         ← next pass
   canvas. Red kept minimal so it doesn't bias bead-colour perception (§7.5 intent).
 - Borderless, flat sections; no number-input spinners; no zoom pill (Ctrl+scroll).
 
-## Export — UPDATED
-- **PNG only**, **whole design on one sheet** (no print-scaling / pagination).
-  PDF export and the mm/bead control removed. Chart still has outlines + edge
-  numbers + guides + colour-key legend, rendered to a single PNG.
+## Export — UPDATED (2026-10-14: see "Export formats" below for SVG + no-outline)
+- **PNG/JPG/SVG**, **whole design on one sheet** (no print-scaling / pagination).
+  PDF export and the mm/bead control removed. Chart has edge numbers + guides +
+  colour-key legend, rendered to a single file. Beads are unoutlined (locked
+  decision #2 reversed).
 
 ## Performance
 - `beadPath` uses a precomputed unit-superellipse polygon (no per-bead Math.pow).
@@ -1511,3 +1515,56 @@ LOCKED (user request — "8 colour is less now" + drag-to-exchange not working):
   canvas) + `scripts/dragswaptest.mjs` (universal-swatch → chip drag still
   works). Dev server for this pass ran on **3001** — port 3000 was occupied
   by the sibling cross-stitch-tool project's own dev server; do not kill it.
+
+## Dashboard reskin from Figma "Beads-UI" (2026-08-29) — DROPPED 2026-10-14
+User pulled a new dashboard design (Figma node 108:266: pink Morii Kamal bg,
+cream Handloom card tiles, "Create New" as first tile, header hamburger +
+centered "Beadwork" wordmark + search bar) and asked to try it live in the
+actual app (`src/App.jsx`, not committed). First pass implemented literally;
+user's reaction: "doesn't look good." A follow-up tweak pass (bigger cards,
+wider search bar, fixed the misplaced "Edited… ago" line — it was inheriting
+the `<button>`'s default centered text-align instead of sitting left-aligned
+under the name) still didn't land.
+
+**Dropped 2026-10-14** — user: "drop the plan of changing the UI and making
+it pink ... revert back to the design which we have committed last." Reverted
+with `git checkout -- src/App.jsx src/icons.jsx`; the uncommitted pink/cream
+reskin is gone from the working tree. Back to the previously shipped
+dashboard (card grid + long-press menu, dark Morii chrome, gallery thumbnails
+from the "Gallery cards with saved thumbnails" pass). No open question left
+here — if a dashboard reskin comes back, it starts fresh from a new Figma
+pass, not from this attempt.
+
+## Export formats: SVG added, bead outlines removed (2026-10-14)
+User asked for three things on the live tool: (1) artwork thumbnails on the
+dashboard, (2) an SVG export (PNG/JPG beads were pixelating), (3) remove the
+outline drawn around every bead in the exported chart.
+
+1. **Dashboard thumbnails**: already implemented and committed (the "Gallery
+   cards with saved thumbnails" pass, `makeThumb()` in `App.jsx`) — just not
+   yet on the **live** site (`newtool/gh-pages` was still on an older deploy,
+   predating that commit). No code change needed; ships on next deploy.
+2. **SVG export**: new `Export SVG` item in the ☰ menu, alongside PNG/JPG.
+   `src/lib/geometry.js` gained `beadPathD()` — the same unit-superellipse
+   silhouette as `beadPath`/`appendBead`, emitted as an SVG path "d" string
+   instead of drawn to a canvas/Path2D. Exposed per-technique as
+   `tech.beadOutlineD` (`techniques/defineTechnique.js`), keeping the
+   "App.jsx/chart.js call through the active technique" rule intact. New
+   `src/lib/chart.js` exports `renderFullChartSVG` (chart: bg/images/beads as
+   `<path>`/`<image>`/`<rect>`, guides as `<line>`, edge numbers as `<text>`,
+   clipped to the bead area via a `<clipPath>`) and `renderLegendSVG` (same
+   layout maths as the canvas `renderLegend`, ported to `<rect>`/`<text>`).
+   `App.jsx`'s `exportChart('svg')` assembles the two into one `<svg>` (chart
+   + legend stacked, same gap/height formula as the PNG path) and downloads
+   it as a Blob — no canvas involved, so there's no browser canvas-size
+   ceiling to shrink for and the file never re-pixelates at any zoom/print
+   size. Reference-photo/background images embed as `<image href="data:...">`
+   (already data URLs in memory) so the SVG stays a single self-contained
+   file.
+3. **Bead outlines removed**: reverses locked decision #2 (see top of this
+   file). `drawBeads` in `chart.js` no longer strokes anything — empty cells
+   draw nothing (just background shows through) and filled beads are flat
+   colour fills with no border. Applies to PNG, JPG, and the new SVG (which
+   never drew outlines to begin with). The legend's small colour-swatch
+   border (`C.filledOutline`) is untouched — that's a different, minor
+   affordance on the key, not the per-bead grid outline the user meant.

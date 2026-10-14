@@ -12,6 +12,7 @@ import {
   nearestBead,
   beadPath,
   appendBead,
+  beadPathD,
 } from '../lib/geometry'
 
 // `hitCell`: on a full-density aligned grid the beads have gaps between them, so
@@ -37,6 +38,7 @@ export function defineTechnique({ exists, beadShapeN, packX, packY, stagger, hit
     nearestBead: (geo, x, y) => nearestBead(geo, x, y, exists),
     beadPath: (ctx, cx, cy, Bw, Bh, tilt = 0) => beadPath(ctx, cx, cy, Bw, Bh, tilt, beadShapeN),
     beadOutline: (path, cx, cy, Bw, Bh, tilt = 0) => appendBead(path, cx, cy, Bw, Bh, tilt, beadShapeN),
+    beadOutlineD: (cx, cy, Bw, Bh, tilt = 0) => beadPathD(cx, cy, Bw, Bh, tilt, beadShapeN),
     ...rest,
   }
 }

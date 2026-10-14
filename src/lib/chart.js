@@ -30,8 +30,7 @@ const key = (c, r) => `${c},${r}`
 // Muted chart chrome (no bright accents — spec §7.5). Tuned to read on a white
 // printed sheet: outlines a clear warm grey, the counting scale a strong dark ink.
 const C = {
-  emptyOutline: '#B6AF9F',
-  filledOutline: 'rgba(46,43,38,0.35)',
+  filledOutline: 'rgba(46,43,38,0.35)', // legend swatch border only — chart beads are unoutlined
   guide: 'rgba(46,43,38,0.30)',
   number: '#33302A',
 }
@@ -56,46 +55,35 @@ export function makePrintGeo({ cols, rows, printBeadMm, beadRatio, tech }) {
 // bead size with its natural gaps, >1 = beads pressed together. Mirrors the
 // drawScale in App.jsx's drawScene so screen and PNG match.
 export async function drawBeads(ctx, { geo, beads, cols, rows, tiltFor, tech, fillScale = 1 }) {
-  const lw = Math.max(0.8, geo.Bw * 0.035)
   const dw = geo.Bw * fillScale
   const dh = geo.Bh * fillScale
-  ctx.lineWidth = lw
-  // Batch beads into Path2Ds (a few fills/strokes) instead of a beginPath→fill→
-  // stroke PER bead — that per-bead canvas churn was the multi-second "Save PNG"
-  // freeze. But we must also FLUSH every ~1500 beads: appending tens of thousands
-  // of subpaths into ONE Path2D degrades super-linearly (a full chart is 100k+
+  // Batch beads into Path2Ds (a few fills) instead of a beginPath→fill PER
+  // bead — that per-bead canvas churn was the multi-second "Save PNG" freeze.
+  // But we must also FLUSH every ~1500 beads: appending tens of thousands of
+  // subpaths into ONE Path2D degrades super-linearly (a full chart is 100k+
   // beads, which hung for minutes), so each path is kept small and drawn as we
   // go. (On screen this never bit us — the draw is culled to the visible range.)
+  // Empty cells and per-bead outlines are intentionally NOT drawn — the chart
+  // shows colour only; guides + edge numbers carry the counting job instead.
   const FLUSH = 1500
-  let empty = new Path2D()          // empty cells (true size) — grid outline
-  let byColor = new Map()           // colour -> Path2D (filled beads, enlarged)
+  let byColor = new Map() // colour -> Path2D (filled beads, enlarged)
   let pending = 0
   const flush = () => {
     if (!pending) return
-    // empty grid outlines, then colour fills, then each colour's outline on top,
-    // so a run of same-colour beads stays countable (locked decision #2).
-    ctx.strokeStyle = C.emptyOutline
-    ctx.stroke(empty)
     for (const [fill, p] of byColor) { ctx.fillStyle = fill; ctx.fill(p) }
-    ctx.strokeStyle = C.filledOutline
-    for (const p of byColor.values()) ctx.stroke(p)
-    empty = new Path2D()
     byColor = new Map()
     pending = 0
   }
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
       if (!tech.beadExists(col, row)) continue
-      const { cx, cy } = geo.centerFor(col, row)
       const fill = beads.get(key(col, row))
+      if (!fill) continue
+      const { cx, cy } = geo.centerFor(col, row)
       const tilt = tiltFor(col, row)
-      if (fill) {
-        let p = byColor.get(fill)
-        if (!p) { p = new Path2D(); byColor.set(fill, p) }
-        tech.beadOutline(p, cx, cy, dw, dh, tilt) // filled beads enlarged (packed)
-      } else {
-        tech.beadOutline(empty, cx, cy, geo.Bw, geo.Bh, tilt) // empty stays true size
-      }
+      let p = byColor.get(fill)
+      if (!p) { p = new Path2D(); byColor.set(fill, p) }
+      tech.beadOutline(p, cx, cy, dw, dh, tilt) // filled beads enlarged (packed)
       if (++pending >= FLUSH) {
         flush()
         // yield to the event loop between chunks so a big export can't freeze the
@@ -353,4 +341,163 @@ export function buildPDF(JsPDF, { fullCanvas, beads, margin = 8, label = 'Beadwo
   const lh = (legend.height / s) * (lw / (legend.width / s))
   doc.addImage(legend, 'PNG', margin, margin, lw, lh)
   return doc
+}
+
+// --- SVG export (vector — beads stay crisp at any print/zoom size) -----------
+// Mirrors drawBeads/drawGuides/drawNumbers/renderLegend above, but emits SVG
+// markup instead of rasterising to a canvas: no browser canvas-size ceiling to
+// shrink for, and no re-pixelation when the artisan zooms or prints large.
+// Beads are unoutlined here too (matches the PNG/JPEG chart).
+function beadsSVG({ geo, beads, cols, rows, tiltFor, tech, fillScale = 1 }) {
+  const dw = geo.Bw * fillScale
+  const dh = geo.Bh * fillScale
+  const byColor = new Map() // colour -> accumulated path "d" (one <path> per colour)
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      if (!tech.beadExists(col, row)) continue
+      const fill = beads.get(key(col, row))
+      if (!fill) continue
+      const { cx, cy } = geo.centerFor(col, row)
+      const d = tech.beadOutlineD(cx, cy, dw, dh, tiltFor(col, row))
+      byColor.set(fill, (byColor.get(fill) || '') + d)
+    }
+  }
+  let out = ''
+  for (const [fill, d] of byColor) out += `<path d="${d}" fill="${fill}"/>`
+  return out
+}
+
+function guidesSVG({ geo, cols, rows, every = GUIDE_EVERY }) {
+  const x0 = geo.padX - geo.Px / 2
+  const x1 = geo.padX + (cols - 1) * geo.Px + geo.rowOffset + geo.Px / 2
+  const y0 = geo.padY - geo.Py / 2
+  const y1 = geo.padY + (rows - 1) * geo.Py + geo.Py / 2
+  const lw = Math.max(1, geo.Bw * 0.04)
+  let out = ''
+  for (let r = 0; r <= rows; r += every) {
+    const y = (geo.padY + r * geo.Py - geo.Py / 2).toFixed(2)
+    out += `<line x1="${x0.toFixed(2)}" y1="${y}" x2="${x1.toFixed(2)}" y2="${y}"/>`
+  }
+  for (let c = 0; c <= cols; c += every) {
+    const x = (geo.padX + c * geo.Px - geo.Px / 2).toFixed(2)
+    out += `<line x1="${x}" y1="${y0.toFixed(2)}" x2="${x}" y2="${y1.toFixed(2)}"/>`
+  }
+  return `<g stroke="${C.guide}" stroke-width="${lw.toFixed(2)}">${out}</g>`
+}
+
+function numbersSVG({ geo, cols, rows, every = GUIDE_EVERY }) {
+  const fs = Math.max(12, geo.Bw * 0.42)
+  const off = -fs * 0.9
+  const tick = fs * 0.55
+  const marks = (n) => {
+    const s = new Set([0, n - 1])
+    for (let i = every - 1; i < n; i += every) s.add(i)
+    return [...s].sort((a, b) => a - b)
+  }
+  let out = ''
+  for (const r of marks(rows)) {
+    const { cy } = geo.centerFor(0, r)
+    out += `<text x="${off.toFixed(2)}" y="${cy.toFixed(2)}" text-anchor="end" dominant-baseline="middle">${rowLabel(r)}</text>`
+    out += `<line x1="-3" y1="${cy.toFixed(2)}" x2="${(-3 - tick).toFixed(2)}" y2="${cy.toFixed(2)}"/>`
+  }
+  for (const c of marks(cols)) {
+    const { cx } = geo.centerFor(c, 0)
+    out += `<text x="${cx.toFixed(2)}" y="${off.toFixed(2)}" text-anchor="middle" dominant-baseline="text-after-edge">${colLabel(c)}</text>`
+    out += `<line x1="${cx.toFixed(2)}" y1="-3" x2="${cx.toFixed(2)}" y2="${(-3 - tick).toFixed(2)}"/>`
+  }
+  return `<g fill="${C.number}" stroke="${C.number}" stroke-width="${Math.max(1.2, geo.Bw * 0.045).toFixed(2)}" ` +
+    `font-family="-apple-system, 'Segoe UI', sans-serif" font-weight="700" font-size="${fs.toFixed(2)}">${out}</g>`
+}
+
+// Build the chart's inner markup (background/images/beads + guides/numbers,
+// already translated past the numbering margin) — NOT wrapped in its own
+// <svg> tag, so the caller can assemble one top-level <svg> with the legend
+// stacked below it (same layout exportChart uses for the PNG/JPEG path).
+export async function renderFullChartSVG({
+  beads, cols, rows, tiltFor, tech, printBeadMm = 8, beadRatio = 1.25,
+  background, composite, srcDoc, guides = true, numbers = true, every = GUIDE_EVERY, fillScale = 1,
+}) {
+  tech = tech || getTechnique('3bead')
+  const geo = makePrintGeo({ cols, rows, printBeadMm, beadRatio, tech })
+  const margin = numbers ? Math.max(16, printBeadMm * PX_PER_MM * 0.95) : 0
+  const width = Math.ceil(margin + geo.width)
+  const height = Math.ceil(margin + geo.height)
+
+  let bgSVG = ''
+  let bodySVG = ''
+  if (composite) {
+    const f = srcDoc && srcDoc.w ? geo.width / srcDoc.w : 1
+    for (const item of composite) {
+      if (item.type === 'color') {
+        bodySVG += `<rect x="0" y="0" width="${geo.width}" height="${geo.height}" fill="${item.color}"/>`
+      } else if (item.type === 'image' && item.img) {
+        const iw = item.img.width * item.t.scale * f
+        const ih = item.img.height * item.t.scale * f
+        bodySVG += `<image href="${item.img.src}" x="${(item.t.x * f).toFixed(2)}" y="${(item.t.y * f).toFixed(2)}" ` +
+          `width="${iw.toFixed(2)}" height="${ih.toFixed(2)}" opacity="${item.opacity == null ? 1 : item.opacity}" preserveAspectRatio="none"/>`
+      } else if (item.type === 'beads') {
+        bodySVG += beadsSVG({ geo, beads: item.map, cols, rows, tiltFor, tech, fillScale })
+      }
+    }
+  } else {
+    if (background && background.type === 'solid') {
+      bgSVG = `<rect x="0" y="0" width="${width}" height="${height}" fill="${background.color}"/>`
+    }
+    if (background && background.type === 'image' && background.img) {
+      const img = background.img
+      const t = background.t || { scale: 1, fx: 0, fy: 0 }
+      const s = Math.max(geo.width / img.width, geo.height / img.height) * (t.scale || 1)
+      const dw = img.width * s, dh = img.height * s
+      bodySVG += `<image href="${img.src}" x="${((geo.width - dw) / 2 + (t.fx || 0) * geo.width).toFixed(2)}" ` +
+        `y="${((geo.height - dh) / 2 + (t.fy || 0) * geo.height).toFixed(2)}" width="${dw.toFixed(2)}" height="${dh.toFixed(2)}" preserveAspectRatio="none"/>`
+    }
+    bodySVG += beadsSVG({ geo, beads, cols, rows, tiltFor, tech, fillScale })
+  }
+
+  let chrome = ''
+  if (guides) chrome += guidesSVG({ geo, cols, rows, every })
+  if (numbers) chrome += numbersSVG({ geo, cols, rows, every })
+
+  const inner = bgSVG +
+    `<g clip-path="url(#chartClip)" transform="translate(${margin},${margin})">${bodySVG}</g>` +
+    `<g transform="translate(${margin},${margin})">${chrome}</g>` +
+    `<defs><clipPath id="chartClip"><rect x="0" y="0" width="${geo.width}" height="${geo.height}"/></clipPath></defs>`
+  return { inner, width, height }
+}
+
+// Legend as SVG markup (mirrors renderLegend's layout maths exactly) + the
+// pixel size it was laid out for, so the caller can position it under the
+// chart. `sheet` null = transparent (matches the PNG export's alpha choice).
+export function renderLegendSVG(beads, { scale = PX_PER_MM, width, height, sheet = '#FFFFFF' } = {}) {
+  const tally = tallyColors(beads)
+  const pad = 6 * scale
+  const baseRowH = 9 * scale
+  const sw = 7 * scale
+  const colW = 70 * scale
+  const headerH = baseRowH
+  const W = Math.ceil(width || colW)
+  const H = Math.ceil(height || pad * 2 + (tally.length + 1) * baseRowH)
+  const availH = H - pad * 2 - headerH
+  const maxCols = Math.max(1, Math.floor((W - pad) / colW))
+  let rowH = baseRowH
+  let rowsPerCol = Math.max(1, Math.floor(availH / rowH))
+  if (rowsPerCol * maxCols < tally.length) {
+    rowsPerCol = Math.ceil(tally.length / maxCols)
+    rowH = availH / rowsPerCol
+  }
+  const swat = Math.min(sw, rowH * 0.8)
+  const font = `-apple-system, 'Segoe UI', sans-serif`
+  let out = sheet ? `<rect x="0" y="0" width="${W}" height="${H}" fill="${sheet}"/>` : ''
+  out += `<text x="${pad.toFixed(2)}" y="${(pad + headerH / 2).toFixed(2)}" dominant-baseline="middle" ` +
+    `font-weight="700" font-size="${(4.6 * scale).toFixed(2)}" fill="#2E2B26" font-family="${font}">Colour key</text>`
+  const fs2 = Math.min(4 * scale, rowH * 0.5)
+  tally.forEach((t, i) => {
+    const x = pad + Math.floor(i / rowsPerCol) * colW
+    const y = pad + headerH + (i % rowsPerCol) * rowH + rowH / 2
+    out += `<rect x="${x.toFixed(2)}" y="${(y - swat / 2).toFixed(2)}" width="${swat.toFixed(2)}" height="${swat.toFixed(2)}" ` +
+      `fill="${t.color}" stroke="${C.filledOutline}" stroke-width="1"/>`
+    out += `<text x="${(x + swat + 4 * scale).toFixed(2)}" y="${y.toFixed(2)}" dominant-baseline="middle" ` +
+      `font-size="${fs2.toFixed(2)}" font-weight="500" fill="#2E2B26" font-family="${font}">${t.color}   ×${t.count}</text>`
+  })
+  return { svg: out, width: W, height: H }
 }

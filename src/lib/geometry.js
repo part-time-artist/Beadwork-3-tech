@@ -161,6 +161,25 @@ export function beadPath(ctx, cx, cy, Bw, Bh, tilt = 0, n = 2.4) {
   ctx.restore()
 }
 
+// Same silhouette as an SVG path "d" string (for the vector/SVG export —
+// resolution-independent, so beads never pixelate at any print size).
+export function beadPathD(cx, cy, Bw, Bh, tilt = 0, n = 2.4) {
+  const rx = Bw / 2
+  const ry = Bh / 2
+  const unit = unitBead(n)
+  const cos = tilt ? Math.cos(tilt) : 1
+  const sin = tilt ? Math.sin(tilt) : 0
+  let d = ''
+  for (let i = 0; i < unit.length; i++) {
+    const ux = unit[i][0] * rx
+    const uy = unit[i][1] * ry
+    const x = cx + (tilt ? ux * cos - uy * sin : ux)
+    const y = cy + (tilt ? ux * sin + uy * cos : uy)
+    d += (i === 0 ? 'M' : 'L') + x.toFixed(2) + ',' + y.toFixed(2)
+  }
+  return d + 'Z'
+}
+
 // Same silhouette, appended as a closed subpath to a Path2D instead of drawn to
 // a context. This lets the grid repaint accumulate thousands of beads into ONE
 // path and fill/stroke it in a single canvas call — the per-bead ctx.fill()/

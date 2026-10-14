@@ -6,7 +6,7 @@ import {
 import { getTechnique, DEFAULT_TECHNIQUE, TECHNIQUES } from './techniques'
 import { fitShape, shapeOutline, adjustShape, shapeLabel } from './lib/quickshape'
 import PhotoImport from './PhotoImport'
-import { renderFullChart, renderLegend, rasterScale, PX_PER_MM } from './lib/chart'
+import { renderFullChart, renderFullChartSVG, renderLegend, renderLegendSVG, rasterScale, PX_PER_MM } from './lib/chart'
 import {
   listArtworks,
   getArtwork,
@@ -289,6 +289,7 @@ export default function Home() {
   const layerShown = (l, gs) => l.visible && groupById(l.groupId, gs)?.visible !== false
   const layerHeld = (l, gs) => l.locked || groupById(l.groupId, gs)?.locked === true
   const [showMenu, setShowMenu] = useState(false) // ☰ dropdown menu
+  const [galleryMenu, setGalleryMenu] = useState(false) // dashboard ☰ dropdown (import/export file)
   const [showDetails, setShowDetails] = useState(false) // Artwork Details modal
   const [showPhotoImport, setShowPhotoImport] = useState(false) // Import photo as beads modal
   const [showColor, setShowColor] = useState(false) // colour picker panel
@@ -3150,6 +3151,34 @@ export default function Home() {
     try {
     const jpeg = fmt === 'jpeg'
     const flat = flattenVisible()
+    if (fmt === 'svg') {
+      // Vector export: beads are <path> shapes, not pixels, so the chart never
+      // pixelates at any zoom/print size. Same layout as the PNG (chart, then
+      // the colour-key legend stacked below with a fixed gap).
+      const chart = await renderFullChartSVG({
+        cols, rows, tiltFor, tech, printBeadMm, beadRatio,
+        composite: chartComposite(false),
+        srcDoc: { w: geo.width, h: geo.height },
+        fillScale: 1 + pack * (PACKED_DRAW - 1),
+      })
+      const gap = Math.round(6 * PX_PER_MM)
+      const legendH = Math.round(chart.width * 0.11)
+      const legend = renderLegendSVG(flat, { width: chart.width, height: legendH, sheet: null })
+      const outW = chart.width
+      const outH = chart.height + gap + legendH
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="0 0 ${outW} ${outH}">` +
+        chart.inner +
+        `<g transform="translate(0,${chart.height + gap})">${legend.svg}</g>` +
+        `</svg>`
+      const blob = new Blob([svg], { type: 'image/svg+xml' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.download = 'beadwork-chart.svg'
+      link.href = url
+      link.click()
+      URL.revokeObjectURL(url)
+      return
+    }
     const chart = await renderFullChart({
       cols,
       rows,
@@ -3218,6 +3247,7 @@ export default function Home() {
   }
   const exportPNG = () => exportChart('png')
   const exportJPG = () => exportChart('jpeg')
+  const exportSVG = () => exportChart('svg')
 
   // no confirm dialog: undo-able, and a locked/hidden layer just toasts why.
   // Clears the ACTIVE layer only (other layers are untouched, Procreate-style).
@@ -4165,6 +4195,8 @@ export default function Home() {
                 <div className="menuDiv" />
                 <button className="menuItem" onClick={() => { setShowMenu(false); exportJPG() }} disabled={exporting}>Export JPG</button>
                 <div className="menuDiv" />
+                <button className="menuItem" onClick={() => { setShowMenu(false); exportSVG() }} disabled={exporting}>Export SVG</button>
+                <div className="menuDiv" />
                 {tech.id === '3bead' && (
                   <>
                     <button
@@ -4378,6 +4410,33 @@ export default function Home() {
                 <div className="galleryHeadBtns">
                   <button className="ghost" onClick={() => setShowLibrary(true)}>Bead library</button>
                   <button className="primary newBtn" onClick={() => setChooser(true)}>+ New artwork</button>
+                  <div className="galleryMenuWrap">
+                    <button className={`tbIcon ${galleryMenu ? 'on' : ''}`} onClick={() => setGalleryMenu((v) => !v)} title="Menu">
+                      <IconMenu />
+                    </button>
+                    {galleryMenu && (
+                      <>
+                        <div className="menuScrim" onClick={() => setGalleryMenu(false)} />
+                        <div className="menuPop galleryMenuPop">
+                          <label className="menuItem fileMenuItem">
+                            Import file / backup
+                            <input
+                              type="file"
+                              accept=".json,application/json"
+                              style={{ display: 'none' }}
+                              onChange={(e) => { setGalleryMenu(false); onDesignFile(e.target.files[0]); e.target.value = '' }}
+                            />
+                          </label>
+                          <div className="menuDiv" />
+                          <button
+                            className="menuItem"
+                            disabled={!artworks.length}
+                            onClick={() => { setGalleryMenu(false); setExportPick(new Set()) }}
+                          >Export file</button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
               {artworks.length === 0 ? (
