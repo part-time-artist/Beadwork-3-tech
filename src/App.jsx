@@ -4408,7 +4408,6 @@ export default function Home() {
               <div className="galleryHead">
                 <div className="brand big">MY ARTWORKS<span className="dot" /><span className="buildTag">v{BUILD_ID}</span></div>
                 <div className="galleryHeadBtns">
-                  <button className="ghost" onClick={() => setShowLibrary(true)}>Bead library</button>
                   <button className="primary newBtn" onClick={() => setChooser(true)}>+ New artwork</button>
                   <div className="galleryMenuWrap">
                     <button className={`tbIcon ${galleryMenu ? 'on' : ''}`} onClick={() => setGalleryMenu((v) => !v)} title="Menu">
@@ -4418,6 +4417,8 @@ export default function Home() {
                       <>
                         <div className="menuScrim" onClick={() => setGalleryMenu(false)} />
                         <div className="menuPop galleryMenuPop">
+                          <button className="menuItem" onClick={() => { setGalleryMenu(false); setShowLibrary(true) }}>Bead library</button>
+                          <div className="menuDiv" />
                           <label className="menuItem fileMenuItem">
                             Import file / backup
                             <input
@@ -4467,18 +4468,6 @@ export default function Home() {
                     ))}
                 </div>
               )}
-              <div className="galleryFoot">
-                <label className="ghost fileBtn half">
-                  Import file / backup
-                  <input
-                    type="file"
-                    accept=".json,application/json"
-                    style={{ display: 'none' }}
-                    onChange={(e) => { onDesignFile(e.target.files[0]); e.target.value = '' }}
-                  />
-                </label>
-                <button className="ghost half" onClick={() => setExportPick(new Set())} disabled={!artworks.length}>Export file</button>
-              </div>
             </div>
           )}
           {/* long-press / right-click card menu */}
@@ -5348,14 +5337,13 @@ export default function Home() {
         }
         .artMenu button:hover { background: ${T.pill}; }
         .artMenu .del:hover { color: #fff; background: ${T.accent}; }
-        /* quiet utility row — compact, not full-width bars under the grid */
-        .galleryFoot { display: flex; gap: 8px; justify-content: flex-end; padding-top: 4px; }
-        .galleryFoot .half { flex: 0 0 auto; width: auto; padding: 10px 16px; }
         .galleryHint { text-align: center; }
 
         /* ── universal bead library (gallery modal) ── */
         .galleryHeadBtns { display: flex; gap: 8px; }
         .galleryHeadBtns .ghost { width: auto; padding: 12px 18px; }
+        .galleryMenuWrap { position: relative; }
+        .galleryMenuPop { top: calc(100% + 8px); left: auto; right: 0; }
         .libHint { font-family: ${T.mono}; font-size: 12px; line-height: 1.5; color: ${T.inkSoft}; }
         .libRow { display: flex; align-items: center; gap: 10px; }
         .libSw {
