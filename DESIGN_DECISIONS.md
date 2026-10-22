@@ -1568,3 +1568,28 @@ outline drawn around every bead in the exported chart.
    never drew outlines to begin with). The legend's small colour-swatch
    border (`C.filledOutline`) is untouched — that's a different, minor
    affordance on the key, not the per-bead grid outline the user meant.
+
+Deployed to live (`b41ffa8` → `newtool/gh-pages`).
+
+## Dashboard header menu: folded + anchored (2026-10-14)
+First pass at the ☰ menu above (built alongside the SVG export) put Import/
+Export behind the hamburger but left **Bead library** as its own button, and
+left the old **footer** row (bottom of the gallery, below the artwork grid)
+still rendering its own Import file / Export file buttons — so the dashboard
+showed 4 buttons (Bead library, + New artwork, footer-Import, footer-Export)
+plus a 5th hamburger that only duplicated two of them. The popup also reused
+the editor's `.menuPop` CSS, which is hardcoded to `top: 62px; left: 20px`
+(anchored to the *editor's* top-left ☰), so on the dashboard it opened in an
+unrelated spot on screen instead of near the button — user: "the current menu
+opens the menu far right on the screen... not helping."
+
+Fix: **+ New artwork** stays exactly where it was; **Bead library**, **Import
+file / backup**, **Export file** all moved into the hamburger's dropdown (3
+items); the dead `.galleryFoot` row and its CSS were deleted entirely (no
+more duplicate buttons). Positioning fix: `.galleryMenuWrap { position:
+relative }` + `.galleryMenuPop { top: calc(100% + 8px); left: auto; right: 0
+}` overrides the shared `.menuPop` base rule so this popup anchors under its
+own button instead of the editor's fixed coordinates — the editor's ☰ menu
+(`.menuPop` without the `galleryMenuPop` modifier) is untouched.
+
+Deployed to live (`6770534` → `newtool/gh-pages`).
