@@ -372,7 +372,7 @@ function guidesSVG({ geo, cols, rows, every = GUIDE_EVERY }) {
   const x1 = geo.padX + (cols - 1) * geo.Px + geo.rowOffset + geo.Px / 2
   const y0 = geo.padY - geo.Py / 2
   const y1 = geo.padY + (rows - 1) * geo.Py + geo.Py / 2
-  const lw = Math.max(1, geo.Bw * 0.04)
+  const lw = Math.max(1 / PX_PER_MM, geo.Bw * 0.04)
   let out = ''
   for (let r = 0; r <= rows; r += every) {
     const y = (geo.padY + r * geo.Py - geo.Py / 2).toFixed(2)
@@ -386,7 +386,7 @@ function guidesSVG({ geo, cols, rows, every = GUIDE_EVERY }) {
 }
 
 function numbersSVG({ geo, cols, rows, every = GUIDE_EVERY }) {
-  const fs = Math.max(12, geo.Bw * 0.42)
+  const fs = Math.max(12 / PX_PER_MM, geo.Bw * 0.42)
   const off = -fs * 0.9
   const tick = fs * 0.55
   const marks = (n) => {
@@ -405,8 +405,22 @@ function numbersSVG({ geo, cols, rows, every = GUIDE_EVERY }) {
     out += `<text x="${cx.toFixed(2)}" y="${off.toFixed(2)}" text-anchor="middle" dominant-baseline="text-after-edge">${colLabel(c)}</text>`
     out += `<line x1="${cx.toFixed(2)}" y1="-3" x2="${cx.toFixed(2)}" y2="${(-3 - tick).toFixed(2)}"/>`
   }
-  return `<g fill="${C.number}" stroke="${C.number}" stroke-width="${Math.max(1.2, geo.Bw * 0.045).toFixed(2)}" ` +
+  return `<g fill="${C.number}" stroke="${C.number}" stroke-width="${Math.max(1.2 / PX_PER_MM, geo.Bw * 0.045).toFixed(2)}" ` +
     `font-family="-apple-system, 'Segoe UI', sans-serif" font-weight="700" font-size="${fs.toFixed(2)}">${out}</g>`
+}
+
+// Geometry for the SVG export, in real millimetres (1 user unit = 1mm) rather
+// than makePrintGeo's 300-DPI print-pixel scale. A vector file's viewBox IS its
+// native coordinate system — some apps (older Illustrator SVG import included)
+// don't reliably honor a physical unit suffix on width/height, so basing the
+// coordinates themselves on raster pixels (thousands of units for a modest
+// chart) made the artboard open many times too large regardless of what unit
+// we declared. Millimetre-native coordinates stay correctly sized even if a
+// viewer ignores units entirely.
+function makeVectorGeo({ cols, rows, printBeadMm, beadRatio, tech }) {
+  const Bw = printBeadMm
+  const Bh = printBeadMm * beadRatio
+  return tech.makeGeometry({ Bw, Bh, cols, rows })
 }
 
 // Build the chart's inner markup (background/images/beads + guides/numbers,
@@ -418,8 +432,8 @@ export async function renderFullChartSVG({
   background, composite, srcDoc, guides = true, numbers = true, every = GUIDE_EVERY, fillScale = 1,
 }) {
   tech = tech || getTechnique('3bead')
-  const geo = makePrintGeo({ cols, rows, printBeadMm, beadRatio, tech })
-  const margin = numbers ? Math.max(16, printBeadMm * PX_PER_MM * 0.95) : 0
+  const geo = makeVectorGeo({ cols, rows, printBeadMm, beadRatio, tech })
+  const margin = numbers ? Math.max(16 / PX_PER_MM, printBeadMm * 0.95) : 0
   const width = Math.ceil(margin + geo.width)
   const height = Math.ceil(margin + geo.height)
 
@@ -495,7 +509,7 @@ export function renderLegendSVG(beads, { scale = PX_PER_MM, width, height, sheet
     const x = pad + Math.floor(i / rowsPerCol) * colW
     const y = pad + headerH + (i % rowsPerCol) * rowH + rowH / 2
     out += `<rect x="${x.toFixed(2)}" y="${(y - swat / 2).toFixed(2)}" width="${swat.toFixed(2)}" height="${swat.toFixed(2)}" ` +
-      `fill="${t.color}" stroke="${C.filledOutline}" stroke-width="1"/>`
+      `fill="${t.color}" stroke="${C.filledOutline}" stroke-width="${(scale / PX_PER_MM).toFixed(2)}"/>`
     out += `<text x="${(x + swat + 4 * scale).toFixed(2)}" y="${y.toFixed(2)}" dominant-baseline="middle" ` +
       `font-size="${fs2.toFixed(2)}" font-weight="500" fill="#2E2B26" font-family="${font}">${t.color}   ×${t.count}</text>`
   })

@@ -1593,3 +1593,55 @@ own button instead of the editor's fixed coordinates — the editor's ☰ menu
 (`.menuPop` without the `galleryMenuPop` modifier) is untouched.
 
 Deployed to live (`6770534` → `newtool/gh-pages`).
+
+## SVG export: fixed oversized artboard + bloated file (2026-10-26)
+User: the SVG export "is becoming too big of a file and not opening in
+Illustrator properly" — wanted it smaller and fitting on screen on open.
+
+Root cause (artboard size): `renderFullChartSVG`'s geometry is built at
+`PX_PER_MM` (11.81 units/mm — a 300-DPI *raster* scale, shared with the PNG
+path) and the outer `<svg>` tag emitted unitless `width`/`height` matching
+those raw numbers. Per the SVG spec, unitless width/height default to 96-DPI
+CSS px (some apps, including older Illustrator behavior, read them as pt/72
+DPI instead) — either way, a chart built at 300-DPI-scale numbers but declared
+with no unit opens 3–4× too large. A modest 200mm-wide chart was opening as
+600–800mm+, which is why it didn't fit on screen.
+
+First fix attempt: kept the internal coordinate space as-is and just declared
+the outer `<svg>` `width`/`height` in mm (dividing by `PX_PER_MM`). **Didn't
+hold** — user re-tested: "still too big... too zoomed in." Illustrator's SVG
+importer doesn't reliably apply a physical unit suffix to rescale a mismatched
+viewBox; it can end up using the raw viewBox numbers near-verbatim as its
+native unit (points), so thousands of 300-DPI-scale units still opened huge
+regardless of what `width="...mm"` said.
+
+**Actual fix**: stopped reusing the PNG path's 300-DPI geometry for SVG at
+all. New `makeVectorGeo()` in `chart.js` builds the geometry with **1 user
+unit = 1mm literally** (`Bw = printBeadMm`, not `printBeadMm * PX_PER_MM`) —
+so the viewBox itself is already correctly scaled, independent of whether any
+given app honors the `mm` unit suffix. The hardcoded pixel-space minimums in
+`guidesSVG`/`numbersSVG` (line-width/font-size floors of `1`, `12`, `1.2` —
+tuned for the old 300-DPI scale) were converted to their mm equivalents
+(`/ PX_PER_MM`) so proportions stay identical. `renderLegendSVG`'s `scale`
+param (default `PX_PER_MM`, for its other PNG-path use) is called with
+`scale: 1` from the SVG export path, and its one remaining hardcoded
+`stroke-width="1"` (swatch border) was converted to `scale / PX_PER_MM` so it
+stays a thin ~0.08mm line instead of becoming a 1mm-thick border at the new
+scale. Verified standalone: a 60×60-bead chart at 8mm/bead now computes to a
+637×615mm artboard — its actual true print size, not inflated.
+
+Root cause (file size): each bead's silhouette was a 37-point polygon
+(`unitBead`'s `steps=36`, tuned for smooth canvas/PNG rendering) emitted as
+raw SVG path commands at 2-decimal precision — for a few thousand beads that
+is a lot of path text, worse than it needs to be since a tiny printed oval
+doesn't need canvas-grade curve resolution.
+
+Fix (`src/lib/geometry.js`): `beadPathD` now draws from a separate, coarser
+cache — `unitBeadSVG(n)` at `steps=16` (17 points) instead of 37 — and emits
+coordinates at 1-decimal instead of 2-decimal precision (0.1 unit ≈ 0.0085mm
+at this scale, still far finer than print needs). `unitBead`/`beadPath`
+(canvas) are untouched, so on-screen editing and PNG/JPG export keep the finer
+silhouette; only the SVG path text shrank — roughly 592→204 bytes/bead in a
+spot check (~2.9× smaller), on top of the correct, much smaller artboard size
+from the mm fix above. Not yet deployed — pending user confirmation it opens
+correctly in Illustrator.

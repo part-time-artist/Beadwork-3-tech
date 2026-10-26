@@ -161,12 +161,36 @@ export function beadPath(ctx, cx, cy, Bw, Bh, tilt = 0, n = 2.4) {
   ctx.restore()
 }
 
+// Coarser silhouette for the SVG export — a 37-point canvas-grade polygon per
+// bead (unitBead's steps=36) bloats an SVG's path text badly over thousands of
+// beads; a tiny oval doesn't need that much detail to look smooth at bead/print
+// scale, so this halves the point count. Cached separately from unitBead so
+// on-screen/PNG rendering (which does want the finer silhouette) is untouched.
+const UNIT_BEAD_SVG_CACHE = new Map()
+function unitBeadSVG(n) {
+  let pts = UNIT_BEAD_SVG_CACHE.get(n)
+  if (pts) return pts
+  const steps = 16
+  pts = []
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * Math.PI * 2
+    const ct = Math.cos(t)
+    const st = Math.sin(t)
+    pts.push([
+      Math.sign(ct) * Math.pow(Math.abs(ct), 2 / n),
+      Math.sign(st) * Math.pow(Math.abs(st), 2 / n),
+    ])
+  }
+  UNIT_BEAD_SVG_CACHE.set(n, pts)
+  return pts
+}
+
 // Same silhouette as an SVG path "d" string (for the vector/SVG export —
 // resolution-independent, so beads never pixelate at any print size).
 export function beadPathD(cx, cy, Bw, Bh, tilt = 0, n = 2.4) {
   const rx = Bw / 2
   const ry = Bh / 2
-  const unit = unitBead(n)
+  const unit = unitBeadSVG(n)
   const cos = tilt ? Math.cos(tilt) : 1
   const sin = tilt ? Math.sin(tilt) : 0
   let d = ''
@@ -175,7 +199,7 @@ export function beadPathD(cx, cy, Bw, Bh, tilt = 0, n = 2.4) {
     const uy = unit[i][1] * ry
     const x = cx + (tilt ? ux * cos - uy * sin : ux)
     const y = cy + (tilt ? ux * sin + uy * cos : uy)
-    d += (i === 0 ? 'M' : 'L') + x.toFixed(2) + ',' + y.toFixed(2)
+    d += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1)
   }
   return d + 'Z'
 }

@@ -3161,12 +3161,18 @@ export default function Home() {
         srcDoc: { w: geo.width, h: geo.height },
         fillScale: 1 + pack * (PACKED_DRAW - 1),
       })
-      const gap = Math.round(6 * PX_PER_MM)
+      // chart.width/height are real millimetres (renderFullChartSVG builds the
+      // whole geometry at 1 unit = 1mm, not the 300-DPI print-pixel scale the
+      // PNG path uses) — some apps don't honor a physical unit suffix on an
+      // SVG's width/height reliably, so the coordinate system itself has to
+      // already be the right physical size. gap/legend stay in the same mm
+      // scale (scale: 1, overriding renderLegendSVG's PX_PER_MM default).
+      const gap = 6
       const legendH = Math.round(chart.width * 0.11)
-      const legend = renderLegendSVG(flat, { width: chart.width, height: legendH, sheet: null })
+      const legend = renderLegendSVG(flat, { width: chart.width, height: legendH, sheet: null, scale: 1 })
       const outW = chart.width
       const outH = chart.height + gap + legendH
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="0 0 ${outW} ${outH}">` +
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${outW.toFixed(2)}mm" height="${outH.toFixed(2)}mm" viewBox="0 0 ${outW} ${outH}">` +
         chart.inner +
         `<g transform="translate(0,${chart.height + gap})">${legend.svg}</g>` +
         `</svg>`
