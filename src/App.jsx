@@ -53,11 +53,11 @@ const THEMES = { dark: DARK, light: LIGHT }
 const themeState = { active: 'dark' } // flipped by the theme toggle (below)
 const T = new Proxy({}, { get: (_t, k) => THEMES[themeState.active][k] })
 
-// A soft, synthesised "bead click" — a warm woody tok that snaps as each bead
-// lands, for a tactile feel (iPad can't vibrate from the web, so this is the
-// satisfying cue). No audio files: a short lowpassed triangle pluck with a
-// randomised pitch so a run of beads sounds organic, not machine-gun. Rate-capped
-// so a fast drag becomes a pleasant tok-tok-tok, not a buzz.
+// A barely-there tactile tap as each bead lands (iPad can't vibrate from the
+// web, so this stands in for haptic feedback). Deliberately NOT tonal — no
+// oscillator, no pitch sweep — just a sliver of lowpass-filtered noise, so it
+// reads as a soft physical tap rather than a game/UI blip. Rate-capped so a
+// fast drag becomes a quiet patter, not a buzz.
 let _actx = null
 let _noise = null
 let _lastTick = 0
@@ -70,42 +70,26 @@ function playBeadTick(kind = 'place') {
     if (_actx.state === 'suspended') _actx.resume()
     const ctx = _actx
     const t = ctx.currentTime
-    // Wood-block synthesis: a bandpassed noise "knock" (the woody attack) + a
-    // short lowpassed sine "body" for warmth, both with a fast knock decay.
     if (!_noise) {
       const len = Math.floor(ctx.sampleRate * 0.05)
       _noise = ctx.createBuffer(1, len, ctx.sampleRate)
       const d = _noise.getChannelData(0)
       for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1
     }
-    const peak = kind === 'erase' ? 0.05 : 0.07
-    // knock (noise through a resonant bandpass)
+    const peak = kind === 'erase' ? 0.018 : 0.03
     const src = ctx.createBufferSource()
     src.buffer = _noise
-    const bp = ctx.createBiquadFilter()
-    bp.type = 'bandpass'
-    bp.frequency.value = (kind === 'erase' ? 620 : 980) + Math.random() * 260
-    bp.Q.value = 7
-    const ng = ctx.createGain()
-    ng.gain.setValueAtTime(0.0001, t)
-    ng.gain.exponentialRampToValueAtTime(peak, t + 0.002)
-    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.055)
-    src.connect(bp).connect(ng).connect(ctx.destination)
+    const lp = ctx.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.value = (kind === 'erase' ? 1300 : 1900) + Math.random() * 300
+    lp.Q.value = 0.6
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.001)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.018)
+    src.connect(lp).connect(g).connect(ctx.destination)
     src.start(t)
-    src.stop(t + 0.07)
-    // body (low sine thump)
-    const bf = (kind === 'erase' ? 150 : 210) + Math.random() * 40
-    const osc = ctx.createOscillator()
-    osc.type = 'sine'
-    osc.frequency.setValueAtTime(bf * 1.5, t)
-    osc.frequency.exponentialRampToValueAtTime(bf, t + 0.04)
-    const og = ctx.createGain()
-    og.gain.setValueAtTime(0.0001, t)
-    og.gain.exponentialRampToValueAtTime(peak * 0.7, t + 0.004)
-    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.07)
-    osc.connect(og).connect(ctx.destination)
-    osc.start(t)
-    osc.stop(t + 0.08)
+    src.stop(t + 0.025)
   } catch (e) {}
 }
 
@@ -276,6 +260,17 @@ export default function Home() {
   const [beads, setBeads] = useState(() => firstLayersRef.current.layers.find((l) => l.type === 'bead').beads)
   const [showLayers, setShowLayers] = useState(false)
   const [layerDrag, setLayerDrag] = useState(null) // { id, dy } while dragging a layer/group row
+  // Multi-select mode for bulk layer ops (Group/Combine/Delete several at
+  // once) — a separate toggle from the normal tap-to-activate/hold-to-drag
+  // gesture grammar so the two never conflict. `lpSelected` holds layer ids
+  // only (never groups/bg); selecting a group's members means expanding it
+  // first and picking the rows.
+  const [lpSelectMode, setLpSelectMode] = useState(false)
+  const [lpSelected, setLpSelected] = useState(() => new Set())
+  const toggleLpSelected = (id) =>
+    setLpSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const exitLpSelectMode = () => { setLpSelectMode(false); setLpSelected(new Set()) }
+  useEffect(() => { if (!showLayers) exitLpSelectMode() }, [showLayers])
   // Layer GROUPS (Procreate folders, one level deep). The stack stays a FLAT
   // array — a group is `{id, name, visible, locked, collapsed}` in `groups`,
   // and member layers carry its id as `layer.groupId`. Members are always
@@ -629,6 +624,75 @@ export default function Home() {
     makeActive(lowerMerged)
     setSelection(new Set())
     setPlacing(null)
+  }
+
+  // ---- bulk layer ops (multi-select panel) -----------------------------------
+  // Group: wrap an arbitrary (possibly non-adjacent) selection into ONE new
+  // group. Groups require contiguous membership (displayRows scans runs), so
+  // the selected layers are pulled out and reinserted as a block where the
+  // topmost selected layer sat — any prior groupId is overwritten.
+  const groupSelectedLayers = (ids) => {
+    const arr = layersRef.current
+    const targets = arr.filter((l) => ids.has(l.id) && l.type !== 'bg')
+    if (targets.length < 2) { showToast('Select at least 2 layers to group'); return }
+    pushHistory(currentDoc())
+    const topIdx = arr.reduce((m, l, i) => (ids.has(l.id) ? i : m), -1)
+    const insertAt = arr.slice(0, topIdx + 1).filter((l) => !ids.has(l.id)).length
+    const g = { id: uid(), name: nextGroupName(), visible: true, locked: false, collapsed: false }
+    const block = targets.map((l) => ({ ...l, groupId: g.id }))
+    const nl = arr.filter((l) => !ids.has(l.id))
+    nl.splice(insertAt, 0, ...block)
+    layersRef.current = nl
+    setLayers(nl)
+    setGroupsBoth([...groupsRef.current, g])
+    dropEmptyGroups(nl) // a selected layer may have been some OTHER group's last member
+    exitLpSelectMode()
+  }
+
+  // Combine: flatten the selected BEAD layers (top-wins, by current stack
+  // order) into one, dropped where the bottom-most selected layer sat — same
+  // restriction as flattenGroup, generalised to an arbitrary selection.
+  const combineSelectedLayers = (ids) => {
+    const arr = layersRef.current
+    const targets = arr.filter((l) => ids.has(l.id))
+    if (targets.length < 2) { showToast('Select at least 2 layers to combine'); return }
+    if (targets.some((l) => l.type !== 'bead')) { showToast('Only bead layers can be combined'); return }
+    pushHistory(currentDoc())
+    const merged = new Map()
+    for (const l of targets) for (const [k, v] of l.beads) merged.set(k, v)
+    const firstIdx = arr.findIndex((l) => ids.has(l.id))
+    const insertAt = arr.slice(0, firstIdx).filter((l) => !ids.has(l.id)).length
+    const flat = makeLayer('Combined', merged)
+    const nl = arr.filter((l) => !ids.has(l.id))
+    nl.splice(insertAt, 0, flat)
+    layersRef.current = nl
+    setLayers(nl)
+    dropEmptyGroups(nl)
+    makeActive(flat)
+    exitLpSelectMode()
+  }
+
+  // Delete: drop every selected layer (never bg), blocked if it would leave
+  // zero bead layers — same floor as the single-layer Delete button.
+  const deleteSelectedLayers = (ids) => {
+    const arr = layersRef.current
+    const targets = arr.filter((l) => ids.has(l.id) && l.type !== 'bg')
+    if (!targets.length) return
+    const remainingBead = arr.filter((l) => !ids.has(l.id) && l.type === 'bead').length
+    if (remainingBead < 1) { showToast('Keep at least one bead layer'); return }
+    pushHistory(currentDoc())
+    const nl = arr.filter((l) => !ids.has(l.id))
+    layersRef.current = nl
+    setLayers(nl)
+    dropEmptyGroups(nl)
+    if (ids.has(adjustIdRef.current)) setAdjustId(null)
+    if (ids.has(activeIdRef.current)) {
+      const fallback = [...nl].reverse().find((l) => l.type === 'bead') || nl[nl.length - 1]
+      makeActive(fallback)
+    }
+    setSelection(new Set())
+    setPlacing(null)
+    exitLpSelectMode()
   }
 
   // ---- panel display rows + drag-reorder -----------------------------------
@@ -1084,9 +1148,15 @@ export default function Home() {
       onSingle()
     }
   }
-  const onLayerRowDown = (e, l) =>
+  const onLayerRowDown = (e, l) => {
+    if (lpSelectMode) {
+      if (l.type === 'bg') return
+      toggleLpSelected(l.id)
+      return
+    }
     rowDrag(e, l.id, () => tapOrRename(l.id, l.type !== 'bg', () => switchLayer(l.id)),
       (steps) => dropLayerAt(l.id, steps))
+  }
   const onGroupRowDown = (e, g) =>
     rowDrag(e, `g:${g.id}`, () => tapOrRename(`g:${g.id}`, true, () => toggleGroupCollapsed(g.id)),
       (steps) => dropGroupAt(g.id, steps))
@@ -1971,8 +2041,28 @@ export default function Home() {
           return p
         }
         if (onScreenBw < 6) {
-          // beads tiny on screen → fast rects, straight from the Map (no per-bead
-          // array), so even a fully-packed huge canvas stays cheap
+          // Beads tiny on screen default to fast rects, straight from the Map (no
+          // per-bead array), so even a fully-packed huge canvas stays cheap. BUT
+          // for a SPARSE/isolated cluster that fast path looks visibly wrong: the
+          // texture tile is a coarse ~12px-per-bead raster, and downscaling AND
+          // rotating it ±45° aliases into a blocky diamond instead of a bead — a
+          // dense fill hides this in the overall woven texture, but a handful of
+          // isolated beads reads clearly as "square" (reported 2026-10-27). Real
+          // vector ovals stay smooth at any size (the canvas's own antialiasing)
+          // and are cheap to draw when there are only a few, so count the VISIBLE
+          // ones first — bounded, no array, so a huge design still stays cheap —
+          // and use ovals whenever there are few enough; dense designs (where the
+          // rect/texture path earns its keep) still take the fast path.
+          let visCount = 0
+          for (const [k] of map) {
+            const ci = k.indexOf(',')
+            const col = +k.slice(0, ci)
+            const row = +k.slice(ci + 1)
+            if (col < c0 || col >= c1 || row < r0 || row >= r1) continue
+            if (isActive && placing?.hide?.has(k)) continue
+            if (++visCount > 2000) break
+          }
+          const asOval = visCount <= 2000
           for (const [k, fill] of map) {
             const ci = k.indexOf(',')
             const col = +k.slice(0, ci)
@@ -1980,9 +2070,13 @@ export default function Home() {
             if (col < c0 || col >= c1 || row < r0 || row >= r1) continue
             if (isActive && placing?.hide?.has(k)) continue
             filledCells.add(cellId(col, row))
-            if (texActive) growBounds(col, row)
             const { cx, cy } = geo.centerFor(col, row)
-            paintCell(pathFor(fill), cx, cy, col, row)
+            if (asOval) {
+              tech.beadOutline(pathFor(fill), cx, cy, dw, dh, tiltFor(col, row))
+            } else {
+              if (texActive) growBounds(col, row)
+              paintCell(pathFor(fill), cx, cy, col, row)
+            }
           }
         } else {
           // beads big enough to show the woven shape: collect the visible ones
@@ -2700,6 +2794,7 @@ export default function Home() {
         s.lastN = n
         fastStrokeRef.current = false // snapped line replaces the map → full redraw
         applyBeads(paintAlong(strokeBase.current, lineSamples(s.start, snap)), true)
+        s.lastP = p
         return
       }
       if (s.snapped) {
@@ -2708,13 +2803,33 @@ export default function Home() {
         s.locked = true
         fastStrokeRef.current = false // rebuilt from base → full redraw
         applyBeads(paintAlong(strokeBase.current, s.pts), true)
+        s.lastP = p
         return
       }
       // clearly not straight by now → stop evaluating for this stroke
       const len = Math.hypot(p.x - s.start.x, p.y - s.start.y)
       if (len >= SNAP_BEADS * geo.Px * 1.5) s.locked = true
     }
+    // A fast drag can jump several bead-widths between consecutive pointermove
+    // events — painting only the current dab then leaves the beads in between
+    // untouched (a dashed line). Step along the segment from the last painted
+    // point so every bead the cursor crossed gets painted too.
+    const prev = s?.lastP
+    if (prev) {
+      const dx = p.x - prev.x
+      const dy = p.y - prev.y
+      const dist = Math.hypot(dx, dy)
+      const step = Math.min(geo.Px, geo.Py) / 4
+      if (dist > step) {
+        const steps = Math.ceil(dist / step)
+        for (let i = 1; i < steps; i++) {
+          const t = i / steps
+          paintBrush(prev.x + dx * t, prev.y + dy * t, tool)
+        }
+      }
+    }
     paintBrush(p.x, p.y, tool)
+    if (s) s.lastP = p
   }
 
   const onPointerDown = (e) => {
@@ -2766,7 +2881,7 @@ export default function Home() {
     recordCrumbRef.current?.(`draw-start(${tool})`) // crash-hunt breadcrumb
     dragging.current = true
     strokeBase.current = beadsRef.current // history: snapshot at stroke start
-    strokeRef.current = { start: p, pts: [], locked: false, snapped: false, lastN: -1 }
+    strokeRef.current = { start: p, pts: [], locked: false, snapped: false, lastN: -1, lastP: p }
     if (tool === 'draw') armShapeHold(e.clientX, e.clientY) // QuickShape hold timer
     // arm the fast-stroke path for a freehand DRAW on the top-most visible layer
     // (so stamping new beads over the snapshot can't paint over an upper layer).
@@ -4012,10 +4127,17 @@ export default function Home() {
               <div className="lpHead">
                 <span className="lpTitle">Layers</span>
                 <div className="lpHeadBtns">
-                  <button className="lpAddBtn lpImgBtn" onClick={() => imgInputRef.current?.click()} title="Add image to trace">
-                    <IconImage />
-                  </button>
-                  <button className="lpAddBtn" onClick={addLayer} title="New layer">+</button>
+                  {lpSelectMode ? (
+                    <button className="lpSelectBtn on" onClick={exitLpSelectMode}>Done</button>
+                  ) : (
+                    <>
+                      <button className="lpSelectBtn" onClick={() => setLpSelectMode(true)}>Select</button>
+                      <button className="lpAddBtn lpImgBtn" onClick={() => imgInputRef.current?.click()} title="Add image to trace">
+                        <IconImage />
+                      </button>
+                      <button className="lpAddBtn" onClick={addLayer} title="New layer">+</button>
+                    </>
+                  )}
                 </div>
                 <input
                   ref={imgInputRef}
@@ -4086,6 +4208,9 @@ export default function Home() {
                       style={dragging ? { transform: `translateY(${layerDrag.dy}px)` } : undefined}
                       onPointerDown={(e) => onLayerRowDown(e, l)}
                     >
+                      {lpSelectMode && l.type !== 'bg' && (
+                        <span className={`lpCheck ${lpSelected.has(l.id) ? 'on' : ''}`} />
+                      )}
                       {l.type === 'bg' ? (
                         <input
                           type="color"
@@ -4154,7 +4279,21 @@ export default function Home() {
                 </div>
               )}
               <div className="lpBar">
-                {(() => {
+                {lpSelectMode ? (
+                  lpSelected.size === 0 ? (
+                    <span className="lpBarHint">Tap layers to select</span>
+                  ) : (
+                    <>
+                      <span className="lpBarHint">{lpSelected.size} selected</span>
+                      <span className="lpBarDiv" />
+                      <button onClick={() => groupSelectedLayers(lpSelected)}>Group</button>
+                      <span className="lpBarDiv" />
+                      <button onClick={() => combineSelectedLayers(lpSelected)}>Combine</button>
+                      <span className="lpBarDiv" />
+                      <button className="lpDel" onClick={() => deleteSelectedLayers(lpSelected)}>Delete</button>
+                    </>
+                  )
+                ) : (() => {
                   const t = activeLayer?.type
                   const isBead = t === 'bead' || t == null
                   return (
@@ -4882,6 +5021,17 @@ export default function Home() {
         .lpAddBtn:hover { background: rgba(255,255,255,0.1); }
         .lpImgBtn { color: ${T.inkSoft}; }
         .lpImgBtn:hover { color: ${T.ink}; }
+        .lpSelectBtn {
+          border: none; background: none; color: ${T.inkSoft}; cursor: pointer;
+          font-family: ${T.mono}; font-size: 14px; padding: 8px 10px; border-radius: 8px;
+        }
+        .lpSelectBtn:hover { background: rgba(255,255,255,0.1); color: ${T.ink}; }
+        .lpSelectBtn.on { color: ${T.accent}; }
+        .lpCheck {
+          flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%;
+          border: 1.5px solid ${T.inkSoft}; box-sizing: border-box;
+        }
+        .lpCheck.on { background: ${T.accent}; border-color: ${T.accent}; }
         .lpList {
           flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px;
           overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
@@ -4965,7 +5115,12 @@ export default function Home() {
         /* .on must beat :hover (incl. iOS sticky hover) so Alpha lock turns green at once */
         .lpBar button.on { background: ${T.accent} !important; color: #fff !important; }
         .lpBar button:disabled { opacity: 0.35; cursor: not-allowed; }
+        .lpBar .lpDel { color: ${T.accent}; }
         .lpBarDiv { width: 1px; height: 22px; background: rgba(51,51,50,0.25); flex-shrink: 0; }
+        .lpBarHint {
+          flex: 1; text-align: center; font-family: ${T.mono}; font-size: 13px;
+          color: ${T.darkInk}; opacity: 0.7;
+        }
 
         /* active-layer-not-editable banner — floats under the toolbar */
         .lockNote {
