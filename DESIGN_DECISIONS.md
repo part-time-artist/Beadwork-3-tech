@@ -1643,5 +1643,15 @@ at this scale, still far finer than print needs). `unitBead`/`beadPath`
 (canvas) are untouched, so on-screen editing and PNG/JPG export keep the finer
 silhouette; only the SVG path text shrank — roughly 592→204 bytes/bead in a
 spot check (~2.9× smaller), on top of the correct, much smaller artboard size
-from the mm fix above. Not yet deployed — pending user confirmation it opens
-correctly in Illustrator.
+from the mm fix above.
+
+User confirmed the mm-native fix opens correctly in Illustrator (no more
+single-bead-fills-screen). Separately asked whether the SVG would fit an A4
+sheet when printed — it won't at native 8mm/bead for anything much bigger
+than ~20×28 beads (locked decision #5 is fixed real-world bead size, no
+auto-fit/pagination), so the answer given was: use the print dialog's
+"Fit to Page"/"Scale to Fit" when printing — vector, so no quality loss: the
+exported file itself keeps the true bead size, only the print shrinks it. No
+code change requested for that part.
+
+Deployed to live (`05cf67b` → `newtool/gh-pages`).
