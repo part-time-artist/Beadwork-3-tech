@@ -2090,17 +2090,25 @@ export default function Home() {
             if (col < c0 || col >= c1 || row < r0 || row >= r1) continue
             if (isActive && placing?.hide?.has(k)) continue
             filledCells.add(cellId(col, row))
-            if (texActive) growBounds(col, row)
             vis.push(col, row, fill)
           }
-          // force rects when the texture is on, so the tile carves clean shapes
-          const asRect = texActive || vis.length / 3 > 2000
+          // Real vector ovals stay smooth at any size (they used to be forced into
+          // the texture-masked rect path whenever texActive was on, even for just a
+          // handful of beads — same diamond/square artifact as the tiny-bead branch
+          // above, just at a size where beads are big enough to afford ovals
+          // outright). Only fall back to rects once there are enough beads that
+          // filling individual ovals would be the slow part.
+          const asRect = vis.length / 3 > 2000
           for (let i = 0; i < vis.length; i += 3) {
             const col = vis[i], row = vis[i + 1], fill = vis[i + 2]
             const { cx, cy } = geo.centerFor(col, row)
             const p = pathFor(fill)
-            if (asRect) paintCell(p, cx, cy, col, row)
-            else tech.beadOutline(p, cx, cy, dw, dh, tiltFor(col, row))
+            if (asRect) {
+              if (texActive) growBounds(col, row)
+              paintCell(p, cx, cy, col, row)
+            } else {
+              tech.beadOutline(p, cx, cy, dw, dh, tiltFor(col, row))
+            }
           }
         }
         for (const [fill, p] of byColor) {
