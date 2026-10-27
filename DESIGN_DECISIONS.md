@@ -1655,3 +1655,88 @@ exported file itself keeps the true bead size, only the print shrinks it. No
 code change requested for that part.
 
 Deployed to live (`05cf67b` → `newtool/gh-pages`).
+
+## Fast-drag gaps, layer multi-select, quieter sound (2026-10-27)
+Three independent asks in one pass:
+
+1. **Fast-drag dashed line**: freehand draw/erase (`handleStrokePoint` in
+   `App.jsx`) painted only a single dab at the CURRENT pointer position each
+   move event — on a fast drag, consecutive events land several bead-widths
+   apart, so the beads in between never got painted (a dashed line). Fixed by
+   tracking the stroke's last painted point (`s.lastP`) and stepping along the
+   segment from there to the new point (density `min(Px,Py)/4`, matching the
+   existing straight-line-snap sampling convention) before the final dab.
+   Applies to both draw and erase.
+2. **Layer multi-select**: the Layers panel only ever acted on the single
+   active layer (Group only worked with the layer directly below it — no way
+   to combine/delete/group an arbitrary selection). Added a "Select" toggle in
+   the panel header; while active, tapping a row toggles a circular checkmark
+   instead of switching the active layer, and the bottom bar swaps to
+   **Group** / **Combine** / **Delete** acting on the whole selection.
+   `groupSelectedLayers` pulls a possibly-non-contiguous selection into one
+   new contiguous group (groups require contiguous `groupId` runs —
+   `displayRows` scans them); `combineSelectedLayers` flattens selected bead
+   layers top-wins (blocks on any non-bead layer, same restriction as
+   `flattenGroup`); `deleteSelectedLayers` mirrors the single-layer Delete's
+   "keep at least one bead layer" floor. Select mode auto-exits if the panel
+   closes.
+3. **Sound**: `playBeadTick`'s wood-block synth (bandpassed noise knock + a
+   pitched sine "body" sweeping 1.5×→1× pitch) read as an arcade/Pac-Man-ish
+   blip — the pitch sweep was the main culprit. Replaced with a single quiet
+   lowpass-filtered noise tap, no oscillator, no pitch — deliberately
+   non-tonal so it reads as a physical tap, not a game sound. Peak gain cut
+   roughly in half too.
+
+Deployed to live (`69f8a79` → `newtool/gh-pages`).
+
+## Sparse/zoomed-out beads render as squares or diamonds (2026-10-27)
+User: beads looked square once zoomed out; follow-up screenshots
+(`assets/fixes/boxy beads issue.png`, 61% zoom; `assets/fixes/beads bleed.png`,
+53% zoom) confirmed it — small/scattered clusters showed sharp-edged
+diamonds (tilted beads) and squares (apex/upright beads) instead of ovals,
+while dense fills looked fine.
+
+Root cause: `drawScene`'s LOD has two "beads too small/numerous for real
+ovals" branches (`onScreenBw < 6` and the `vis.length/3 > 2000` else-branch),
+both of which fall back to flat colour quads with a shared woven-texture
+pattern (`beadTexture`/`texActive`) painted over them to fake the oval shape
+— a perf shortcut, since filling real ovals for thousands of beads stalls a
+frame. Both branches forced that texture-masked path **whenever `texActive`
+was true**, regardless of how few beads were actually on screen. For an
+isolated cluster the texture tile (a coarse ~12px-per-bead raster) aliases
+badly when downscaled and rotated ±45° — invisible in a dense weave (hidden in
+the overall texture) but glaringly obvious on a handful of beads.
+
+Diagnosis used `scripts/` + Playwright (per CLAUDE.md convention) to
+reproduce headlessly and binary-search the cause: confirmed `texActive` was
+genuinely true with a valid, non-degenerate paint rect (so the overlay logic
+itself wasn't broken), dumped the actual texture tile bitmap (`tex.canvas.
+toDataURL()`) and confirmed it was a correctly-shaped oval tile — so the bug
+wasn't the tile either. Tried raising `TILE_BEAD_PX` (12→64) as a first guess
+(more tile resolution survives downscaling better) — measurably better but
+not clean, and didn't explain the sharp flat-topped apex beads. Root cause
+was architectural, not resolution: the LOD was choosing the wrong RENDER
+STYLE, not rendering the right one badly.
+
+Fix (`App.jsx`, both branches): stopped forcing the texture/rect path on
+`texActive` alone. The `onScreenBw<6` branch now does a cheap bounded count
+of visible beads first (early-exits past 2000, no array allocation — stays
+safe for a huge dense design) and uses real `tech.beadOutline` ovals whenever
+there are few enough; the else-branch already builds a `vis` array, so it
+needed only `const asRect = vis.length / 3 > 2000` (dropped the `texActive ||`
+). Beads rendered as ovals are excluded from the shared texture-overlay
+bounding box (`growBounds` only called on the rect path) so the overlay never
+re-masks an already-round bead. Real vector ovals antialias via the canvas's
+own math regardless of rotation/size, so this is strictly higher quality than
+the raster tile for the cases it now applies to; dense fills (where the
+rect+texture path earns its keep) are untouched — verified via a scripted
+2000+ bead fill still choosing the fast path with jali intact, no perf
+regression.
+
+First deploy only fixed the `onScreenBw<6` branch — user re-tested at 53%
+zoom (lands in the OTHER branch, `onScreenBw>=6`) and still saw it. Second
+pass applied the identical fix there. Verified both at 48% and 67% zoom with
+scripted before/after screenshots (sparse clusters + lone single beads +
+tilted beads all round after the fix).
+
+Deployed to live (`78b1a7a` → `newtool/gh-pages`).
